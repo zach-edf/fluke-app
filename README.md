@@ -29,8 +29,9 @@ What exists now:
 
 What still needs repeated real-hardware validation:
 
-- end-to-end BLE behavior on the rebuilt stack
+- longer-duration BLE sessions on the rebuilt stack
 - reconnect stability over longer sessions
+- desktop UI exercise against a real meter
 - packaged installer behavior
 - additional model support beyond the 376 FC
 

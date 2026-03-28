@@ -12,14 +12,14 @@ This matrix is intentionally conservative. A model should only move to `Supporte
 
 | Model | Profile ID | Status | Notes |
 | --- | --- | --- | --- |
-| Fluke 376 FC | `fluke_376fc` | Experimental | Shared CLI/desktop/SDK path exists. Non-hardware tests are strong. Real hardware validation still needs another pass after the current architecture rebuild. |
+| Fluke 376 FC | `fluke_376fc` | Supported | Shared CLI/desktop/SDK path exists. Real-hardware validation completed on March 28, 2026 for scan, live stream, SQLite logging, CSV/JSON export, and raw fixture capture against a physical meter. |
 
 ## Platform Matrix
 
 | Platform | Status | Notes |
 | --- | --- | --- |
 | Windows | Experimental | Primary current dev environment. Desktop + CLI run in the venv. BLE behavior still needs repeated real-meter testing. |
-| macOS | Unknown | Architecture is intended to support it through Bleak, but this repo state has not been validated recently. |
+| macOS | Experimental | CLI real-meter validation completed on March 28, 2026 on macOS 26.3 with Python 3.13. Desktop UI and packaged builds still need explicit validation. |
 | Linux | Unknown | Core stack should be portable, but no launch/adapter validation is recorded yet. |
 
 ## Workflow Matrix

@@ -86,6 +86,9 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(readings), 1)
             self.assertEqual(len(markers), 1)
             self.assertEqual(readings[0].display_text, "12.34 V")
+            self.assertEqual(readings[0].source_device_id, device.device_id)
+            self.assertEqual(readings[0].mode, "dc")
+            self.assertEqual(readings[0].metadata["function_key"], "dc_voltage")
 
             csv_path = Path(exporter.export_csv(session.session_id, tmp / "session.csv"))
             json_path = Path(exporter.export_json(session.session_id, tmp / "session.json"))
@@ -95,13 +98,18 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["session_id"], session.session_id)
             self.assertEqual(rows[0]["source_device_id"], device.device_id)
+            self.assertEqual(rows[0]["mode"], "dc")
 
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["session"]["session_id"], session.session_id)
             self.assertEqual(payload["device"]["device_id"], device.device_id)
+            self.assertEqual(payload["device"]["support_level"], "supported")
             self.assertEqual(payload["statistics"]["reading_count"], 1)
             self.assertEqual(payload["statistics"]["min_value"], 12.34)
             self.assertEqual(len(payload["readings"]), 1)
+            self.assertEqual(payload["readings"][0]["source_device_id"], device.device_id)
+            self.assertEqual(payload["readings"][0]["mode"], "dc")
+            self.assertEqual(payload["readings"][0]["metadata"]["function_key"], "dc_voltage")
             self.assertEqual(len(payload["markers"]), 1)
             self.assertEqual(payload["markers"][0]["note"], "Clamp repositioned")
         finally:

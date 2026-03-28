@@ -32,8 +32,8 @@ async def handle(args: argparse.Namespace) -> int:
     manager.subscribe_readings(on_reading)
 
     await manager.connect(args.device, profile_id=args.profile)
+    print(f"Starting stream from {args.device}. Press Ctrl+C to stop.")
     await manager.start_stream()
-    print(f"Streaming from {args.device}. Press Ctrl+C to stop.")
 
     try:
         if args.duration > 0 and args.count > 0:

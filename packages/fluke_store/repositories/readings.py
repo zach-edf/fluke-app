@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 
@@ -16,8 +17,8 @@ class ReadingRepository:
             """
             INSERT INTO readings (
                 session_id, timestamp_utc, value, unit, measurement_type,
-                status, display_text, raw_payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                status, display_text, source_device_id, mode, metadata_json, raw_payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -27,6 +28,9 @@ class ReadingRepository:
                 reading.measurement_type.value,
                 reading.status.value,
                 reading.display_text,
+                reading.source_device_id,
+                reading.mode,
+                json.dumps(reading.metadata, sort_keys=True),
                 reading.raw_payload,
             ),
         )
@@ -46,6 +50,7 @@ class ReadingRepository:
 
 
 def _reading_from_row(row: sqlite3.Row) -> Reading:
+    metadata_raw = row["metadata_json"]
     return Reading(
         timestamp_utc=datetime.fromisoformat(row["timestamp_utc"]),
         value=row["value"],
@@ -53,7 +58,18 @@ def _reading_from_row(row: sqlite3.Row) -> Reading:
         measurement_type=MeasurementType(row["measurement_type"]),
         status=ReadingStatus(row["status"]),
         display_text=row["display_text"],
-        source_device_id="",
+        source_device_id=row["source_device_id"],
+        mode=row["mode"],
         raw_payload=row["raw_payload"],
-        metadata={},
+        metadata=_metadata_from_json(metadata_raw),
     )
+
+
+def _metadata_from_json(raw: str | None) -> dict[str, object]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

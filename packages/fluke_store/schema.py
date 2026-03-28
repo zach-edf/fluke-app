@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS readings (
     measurement_type TEXT NOT NULL,
     status TEXT NOT NULL,
     display_text TEXT NOT NULL,
+    source_device_id TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     raw_payload BLOB NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );

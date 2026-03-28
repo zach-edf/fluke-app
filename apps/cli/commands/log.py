@@ -66,8 +66,8 @@ async def handle(args: argparse.Namespace) -> int:
             )
         )
 
+        print(f"Starting logging session {session.session_id} from {device.device_id}. Press Ctrl+C to stop.")
         await manager.start_stream()
-        print(f"Logging session {session.session_id} from {device.device_id}. Press Ctrl+C to stop.")
 
         try:
             if args.duration > 0 and args.count > 0:

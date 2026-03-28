@@ -57,7 +57,7 @@ class DeviceManager:
                     ble_address=device_id,
                     model_name=profile.model_name,
                     profile_id=profile.profile_id,
-                    support_level="assumed",
+                    support_level="supported" if profile_id else "assumed",
                     capabilities=profile.capabilities(),
                 )
 

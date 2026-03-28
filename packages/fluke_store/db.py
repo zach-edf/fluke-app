@@ -31,7 +31,20 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 def initialize(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA_SQL)
+    _ensure_column(con, "readings", "source_device_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "readings", "mode", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "readings", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
     con.commit()
+
+
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {
+        row["name"]
+        for row in con.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column in existing:
+        return
+    con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 class FlukeStore:
