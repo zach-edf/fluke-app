@@ -1,0 +1,38 @@
+name = "mode_sweep"
+description = "Walk through all meter modes to validate decoding coverage"
+
+[record]
+duration = 420
+read_once = false
+console = "changes"
+dashboard = true
+dashboard_refresh_hz = 6
+plot = false
+chars = [
+  "b6982901-7562-11e2-b50d-00163e46f8fe",
+  "b698290f-7562-11e2-b50d-00163e46f8fe",
+]
+out = "logs/mode_sweep.csv"
+events_out = "logs/mode_sweep_events.csv"
+
+[events]
+contact_threshold = 0.3
+over_voltage = 1000.0
+unstable_delta = 1.0
+unstable_window = 2.0
+unstable_min_points = 6
+
+[sinks]
+sqlite = "logs/fluke_sessions.db"
+parquet = "logs/parquet/mode_sweep.parquet"
+
+[annotations]
+b = "Dial changed"
+o = "Range changed"
+m = "Measurement source changed"
+n = "General note"
+
+[report]
+dir = "reports"
+formats = "html,pdf"
+title = "Mode Sweep Validation Report"

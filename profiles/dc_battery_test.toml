@@ -1,0 +1,40 @@
+name = "dc_battery_test"
+description = "Battery contact test with dashboard, events, and full sinks"
+
+[record]
+duration = 180
+read_once = false
+console = "none"
+dashboard = true
+dashboard_refresh_hz = 6
+plot = true
+plot_theme = "brand"
+plot_window = 90
+chars = [
+  "b6982901-7562-11e2-b50d-00163e46f8fe",
+  "b698290f-7562-11e2-b50d-00163e46f8fe",
+]
+out = "logs/dc_battery_test.csv"
+events_out = "logs/dc_battery_test_events.csv"
+
+[events]
+contact_threshold = 0.3
+over_voltage = 4.4
+unstable_delta = 0.25
+unstable_window = 1.2
+unstable_min_points = 6
+
+[sinks]
+sqlite = "logs/fluke_sessions.db"
+parquet = "logs/parquet/dc_battery_test.parquet"
+
+[annotations]
+b = "Battery connected"
+o = "Battery removed"
+m = "Mode changed manually"
+n = "General note"
+
+[report]
+dir = "reports"
+formats = "html,pdf"
+title = "DC Battery Test Report"
