@@ -37,10 +37,11 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
-        recorder = SessionRecorder(store.sessions, store.readings)
+        recorder = SessionRecorder(store.sessions, store.readings, store.markers)
         exporter = ExportService(
             store.sessions,
             store.readings,
+            store.markers,
             SessionCsvExporter(),
             SessionJsonExporter(device_repo=store.devices),
         )
@@ -70,6 +71,7 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             await scenario.run(adapter, device.device_id)
+            marker = recorder.add_marker("Clamp repositioned")
 
             ended = recorder.stop()
             await manager.disconnect()
@@ -77,9 +79,12 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(ended)
             self.assertEqual(recorder.reading_count(), 1)
             self.assertEqual(store.sessions.get(session.session_id).title, "Replay Session")
+            self.assertEqual(marker.note, "Clamp repositioned")
 
             readings = store.readings.list_for_session(session.session_id)
+            markers = store.markers.list_for_session(session.session_id)
             self.assertEqual(len(readings), 1)
+            self.assertEqual(len(markers), 1)
             self.assertEqual(readings[0].display_text, "12.34 V")
 
             csv_path = Path(exporter.export_csv(session.session_id, tmp / "session.csv"))
@@ -94,7 +99,11 @@ class LoggingFlowTests(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["session"]["session_id"], session.session_id)
             self.assertEqual(payload["device"]["device_id"], device.device_id)
+            self.assertEqual(payload["statistics"]["reading_count"], 1)
+            self.assertEqual(payload["statistics"]["min_value"], 12.34)
             self.assertEqual(len(payload["readings"]), 1)
+            self.assertEqual(len(payload["markers"]), 1)
+            self.assertEqual(payload["markers"][0]["note"], "Clamp repositioned")
         finally:
             store.close()
 

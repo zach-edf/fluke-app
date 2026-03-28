@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fluke_core.models.device import DeviceInfo
+from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 from fluke_store.repositories.devices import DeviceRepository
+from fluke_store.repositories.markers import MarkerRepository
 from fluke_store.repositories.readings import ReadingRepository
 from fluke_store.repositories.sessions import SessionRepository
 from fluke_store.schema import SCHEMA_SQL
@@ -35,6 +37,7 @@ class FlukeStore:
         self.con = connect(self.path)
         initialize(self.con)
         self.devices = DeviceRepository(self.con)
+        self.markers = MarkerRepository(self.con)
         self.sessions = SessionRepository(self.con)
         self.readings = ReadingRepository(self.con)
 
@@ -49,6 +52,9 @@ class FlukeStore:
 
     def add_reading(self, session_id: str, reading: Reading) -> Reading:
         return self.readings.append(session_id, reading)
+
+    def add_marker(self, session_id: str, marker: SessionMarker) -> SessionMarker:
+        return self.markers.append(session_id, marker)
 
     def export_snapshot(
         self,
@@ -74,4 +80,7 @@ class FlukeStore:
             readings.extend(self.readings.list_for_session(session.session_id))
 
         devices = [device for device_id in device_ids if (device := self.devices.get(device_id)) is not None]
-        return {"devices": devices, "sessions": sessions, "readings": readings}
+        markers = []
+        for session in sessions:
+            markers.extend(self.markers.list_for_session(session.session_id))
+        return {"devices": devices, "sessions": sessions, "readings": readings, "markers": markers}

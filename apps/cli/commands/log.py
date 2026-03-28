@@ -28,10 +28,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 async def handle(args: argparse.Namespace) -> int:
     manager = build_device_manager()
     store = open_store(args.database)
-    recorder = SessionRecorder(store.sessions, store.readings)
+    recorder = SessionRecorder(store.sessions, store.readings, store.markers)
     export_service = ExportService(
         store.sessions,
         store.readings,
+        store.markers,
         SessionCsvExporter(),
         SessionJsonExporter(device_repo=store.devices),
     )
@@ -95,6 +96,7 @@ async def handle(args: argparse.Namespace) -> int:
             export_service = ExportService(
                 store.sessions,
                 store.readings,
+                store.markers,
                 SessionCsvExporter(),
                 SessionJsonExporter(device_repo=store.devices),
             )

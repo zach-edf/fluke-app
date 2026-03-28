@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,15 +12,18 @@ from apps.desktop.viewmodels import (
     LiveReadingViewModel,
     RecentDeviceViewModel,
     ScannedDeviceViewModel,
+    SessionMarkerViewModel,
     SettingsViewModel,
     SessionSummaryViewModel,
     SessionViewModel,
 )
 from fluke_app import ExportService, SessionRecorder, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
+from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.services.statistics import summarize_readings
 
 
 class AppPresenter:
@@ -34,10 +38,11 @@ class AppPresenter:
         self._store = store
         self._app_version = app_version
         self._export_directory = Path(export_directory)
-        self._recorder = SessionRecorder(store.sessions, store.readings)
+        self._recorder = SessionRecorder(store.sessions, store.readings, store.markers)
         self._export_service = ExportService(
             store.sessions,
             store.readings,
+            store.markers,
             SessionCsvExporter(),
             SessionJsonExporter(device_repo=store.devices),
         )
@@ -53,6 +58,10 @@ class AppPresenter:
         )
         self._current_device: DeviceInfo | None = None
         self._last_completed_session_id: str | None = None
+        self._live_points: deque[tuple[float, float]] = deque(maxlen=300)
+        self._live_marker_points: deque[tuple[float, float]] = deque(maxlen=100)
+        self._live_readings: list[Reading] = []
+        self._chart_t0: datetime | None = None
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
         self.refresh_recent_devices()
@@ -103,6 +112,10 @@ class AppPresenter:
         with self._lock:
             self._current_device = device
             label = device.nickname or device.model_name or device.device_id
+            self._chart_t0 = None
+            self._live_points.clear()
+            self._live_marker_points.clear()
+            self._live_readings = []
             self._home = replace(
                 self._home,
                 connection_text=f"Connected to {label}",
@@ -112,6 +125,10 @@ class AppPresenter:
                 self._live,
                 connection_text=f"Connected to {label}",
                 status_text="Streaming",
+                chart_points=(),
+                marker_points=(),
+                summary_text="Min - | Max - | Avg -",
+                marker_count_text="0 markers",
             )
             self._discovery = replace(
                 self._discovery,
@@ -140,6 +157,10 @@ class AppPresenter:
         await self._device_manager.disconnect()
         with self._lock:
             self._current_device = None
+            self._chart_t0 = None
+            self._live_points.clear()
+            self._live_marker_points.clear()
+            self._live_readings = []
             self._home = replace(
                 self._home,
                 connection_text="Disconnected",
@@ -151,6 +172,10 @@ class AppPresenter:
                 status_text="Disconnected",
                 is_logging=False,
                 session_title=None,
+                chart_points=(),
+                marker_points=(),
+                summary_text="Min - | Max - | Avg -",
+                marker_count_text="0 markers",
             )
             self._discovery = replace(self._discovery, status_text="Disconnected")
             self._settings = replace(self._settings, diagnostics_text="Disconnected.")
@@ -186,7 +211,10 @@ class AppPresenter:
                 active_title_text=session_label,
                 reading_count_text="0 readings",
                 export_status_text="",
+                selected_session_id=session.session_id,
             )
+        self.refresh_recent_sessions()
+        self.select_session(session.session_id)
         return session.session_id
 
     def stop_logging(self) -> Session | None:
@@ -205,10 +233,28 @@ class AppPresenter:
                 self._session,
                 active_session_id=session.session_id,
                 active_title_text=session_label,
+                selected_session_id=session.session_id,
             )
             self._home = replace(self._home, active_session_text=session_label)
         self.refresh_recent_sessions()
+        self.select_session(session.session_id)
         return session
+
+    def add_marker(self, note: str, label: str = "note") -> SessionMarker:
+        marker = self._recorder.add_marker(note, label=label)
+        with self._lock:
+            if self._chart_t0 is not None:
+                x_value = max((marker.timestamp_utc - self._chart_t0).total_seconds(), 0.0)
+                y_value = self._live_points[-1][1] if self._live_points else 0.0
+                self._live_marker_points.append((x_value, y_value))
+            self._live = replace(
+                self._live,
+                marker_points=tuple(self._live_marker_points),
+                marker_count_text=f"{self._recorder.marker_count()} markers",
+            )
+        if self.session_view_model().selected_session_id == marker.session_id:
+            self.select_session(marker.session_id)
+        return marker
 
     def export_session_csv(self, path: str | Path, session_id: str | None = None) -> str:
         target = self._resolve_export_session_id(session_id)
@@ -232,6 +278,10 @@ class AppPresenter:
             self._export_directory = export_dir
             self._settings = replace(self._settings, export_directory_text=str(export_dir))
 
+    def set_export_status(self, message: str) -> None:
+        with self._lock:
+            self._session = replace(self._session, export_status_text=message)
+
     async def shutdown(self) -> None:
         if self._recorder.active_session() is not None:
             self.stop_logging()
@@ -248,6 +298,29 @@ class AppPresenter:
         rows = tuple(_session_vm(session) for session in sessions)
         with self._lock:
             self._session = replace(self._session, recent_sessions=rows)
+        selected = self.session_view_model().selected_session_id
+        if selected:
+            try:
+                self.select_session(selected)
+                return
+            except RuntimeError:
+                pass
+        if rows:
+            self.select_session(rows[0].session_id)
+        else:
+            with self._lock:
+                self._session = replace(
+                    self._session,
+                    selected_session_id=None,
+                    active_title_text="No active session",
+                    reading_count_text="0 readings",
+                    selected_summary_text="Min - | Max - | Avg -",
+                    selected_unit_text="",
+                    selected_session_notes="",
+                    selected_markers=(),
+                    chart_points=(),
+                    marker_points=(),
+                )
 
     def report_error(self, message: str) -> None:
         with self._lock:
@@ -261,10 +334,42 @@ class AppPresenter:
         with self._lock:
             self._discovery = replace(self._discovery, selected_device_id=device_id)
 
+    def select_session(self, session_id: str) -> None:
+        session = self._store.sessions.get(session_id)
+        if session is None:
+            raise RuntimeError(f"Unknown session {session_id!r}.")
+        readings = self._store.readings.list_for_session(session_id)
+        markers = self._store.markers.list_for_session(session_id)
+        stats = summarize_readings(readings)
+        points = tuple(_chart_points(readings))
+        marker_points = tuple(_marker_points(readings, markers))
+        marker_rows = tuple(_marker_vm(marker) for marker in markers)
+        unit_text = next((reading.unit for reading in readings if reading.unit), "")
+        with self._lock:
+            self._session = replace(
+                self._session,
+                selected_session_id=session_id,
+                active_title_text=session.title or session.session_id,
+                reading_count_text=f"{len(readings)} readings",
+                selected_summary_text=_summary_text(stats),
+                selected_unit_text=unit_text,
+                selected_session_notes=session.notes or "",
+                selected_markers=marker_rows,
+                chart_points=points,
+                marker_points=marker_points,
+            )
+
     def on_reading(self, reading: Reading) -> None:
         value = "--" if reading.value is None else f"{reading.value:.6g}"
         timestamp = reading.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
         with self._lock:
+            self._live_readings.append(reading)
+            if self._chart_t0 is None:
+                self._chart_t0 = reading.timestamp_utc
+            if reading.value is not None and self._chart_t0 is not None:
+                x_value = max((reading.timestamp_utc - self._chart_t0).total_seconds(), 0.0)
+                self._live_points.append((x_value, reading.value))
+            live_stats = summarize_readings(self._live_readings[-300:])
             active_session = self._recorder.active_session()
             is_logging = active_session is not None
             session_title = None if active_session is None else (active_session.title or active_session.session_id)
@@ -277,6 +382,10 @@ class AppPresenter:
                 session_title=session_title,
                 is_logging=is_logging,
                 last_updated_text=timestamp,
+                summary_text=_summary_text(live_stats),
+                marker_count_text=f"{self._recorder.marker_count()} markers",
+                chart_points=tuple(self._live_points),
+                marker_points=tuple(self._live_marker_points),
             )
             self._session = replace(
                 self._session,
@@ -369,3 +478,51 @@ def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
         support_text=device.support_level,
         last_seen_text=last_seen_text,
     )
+
+
+def _marker_vm(marker: SessionMarker) -> SessionMarkerViewModel:
+    timestamp_text = marker.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
+    return SessionMarkerViewModel(
+        marker_id=marker.marker_id,
+        timestamp_text=timestamp_text,
+        label=marker.label,
+        note=marker.note,
+    )
+
+
+def _summary_text(stats) -> str:
+    min_text = "-" if stats.min_value is None else f"{stats.min_value:.6g}"
+    max_text = "-" if stats.max_value is None else f"{stats.max_value:.6g}"
+    avg_text = "-" if stats.avg_value is None else f"{stats.avg_value:.6g}"
+    return (
+        f"Min {min_text} | Max {max_text} | Avg {avg_text} | "
+        f"Samples {stats.reading_count} | Duration {stats.duration_s:.1f}s"
+    )
+
+
+def _chart_points(readings: list[Reading]) -> list[tuple[float, float]]:
+    numeric = [reading for reading in readings if reading.value is not None]
+    if not numeric:
+        return []
+    start = numeric[0].timestamp_utc
+    return [
+        (max((reading.timestamp_utc - start).total_seconds(), 0.0), float(reading.value))
+        for reading in numeric
+        if reading.value is not None
+    ]
+
+
+def _marker_points(readings: list[Reading], markers: list[SessionMarker]) -> list[tuple[float, float]]:
+    numeric = [reading for reading in readings if reading.value is not None]
+    if not numeric:
+        return []
+    start = numeric[0].timestamp_utc
+    marker_values: list[tuple[float, float]] = []
+    numeric_index = 0
+    current_value = float(numeric[0].value)
+    for marker in markers:
+        while numeric_index + 1 < len(numeric) and numeric[numeric_index + 1].timestamp_utc <= marker.timestamp_utc:
+            numeric_index += 1
+            current_value = float(numeric[numeric_index].value)
+        marker_values.append((max((marker.timestamp_utc - start).total_seconds(), 0.0), current_value))
+    return marker_values

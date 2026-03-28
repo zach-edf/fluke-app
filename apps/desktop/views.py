@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from apps.desktop.widgets import build_reading_chart
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -202,6 +205,7 @@ def _discovery_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
 
 
 def _live_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
+    QHBoxLayout = qt["QHBoxLayout"]
     QLabel = qt["QLabel"]
     QLineEdit = qt["QLineEdit"]
     QTextEdit = qt["QTextEdit"]
@@ -219,11 +223,22 @@ def _live_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     status = QLabel()
     connection = QLabel()
     last_updated = QLabel()
+    session = QLabel()
+    summary = QLabel()
+    marker_count = QLabel()
+    chart = build_reading_chart(
+        title="Live Reading",
+        empty_text="Connect to a supported meter to start plotting live data.",
+    )
     title_input = QLineEdit()
     notes_input = QTextEdit()
     notes_input.setFixedHeight(80)
+    marker_input = QLineEdit()
+    marker_input.setPlaceholderText("Add a marker note during logging")
     start_button = QPushButton("Start Logging")
     stop_button = QPushButton("Stop Logging")
+    add_marker_button = QPushButton("Add Marker")
+    export_chart_button = QPushButton("Export Live Chart")
     disconnect_button = QPushButton("Disconnect")
 
     form = QFormLayout()
@@ -240,14 +255,33 @@ def _live_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
         )
     )
     stop_button.clicked.connect(lambda: _safe_call(runtime, runtime.presenter.stop_logging))
+    add_marker_button.clicked.connect(
+        lambda: _safe_call(
+            runtime,
+            lambda: _add_live_marker(runtime, marker_input),
+        )
+    )
+    export_chart_button.clicked.connect(
+        lambda: _safe_call(runtime, lambda: _export_chart(runtime, chart, _live_chart_export_path(runtime)))
+    )
     disconnect_button.clicked.connect(lambda: _submit(runtime, runtime.presenter.disconnect_device()))
 
-    for widget in (value, unit, measurement, status, connection, last_updated):
+    action_row = QHBoxLayout()
+    action_row.addWidget(start_button)
+    action_row.addWidget(stop_button)
+    action_row.addWidget(export_chart_button)
+    action_row.addWidget(disconnect_button)
+
+    marker_row = QHBoxLayout()
+    marker_row.addWidget(marker_input, 1)
+    marker_row.addWidget(add_marker_button)
+
+    for widget in (value, unit, measurement, status, connection, session, last_updated, summary, marker_count):
         layout.addWidget(widget)
+    layout.addWidget(chart.widget)
     layout.addLayout(form)
-    layout.addWidget(start_button)
-    layout.addWidget(stop_button)
-    layout.addWidget(disconnect_button)
+    layout.addLayout(marker_row)
+    layout.addLayout(action_row)
 
     return _PanelRefs(
         panel=panel,
@@ -257,19 +291,28 @@ def _live_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
             "measurement": measurement,
             "status": status,
             "connection": connection,
+            "session": session,
             "last_updated": last_updated,
+            "summary": summary,
+            "marker_count": marker_count,
             "title_input": title_input,
+            "marker_input": marker_input,
             "start_button": start_button,
             "stop_button": stop_button,
+            "add_marker_button": add_marker_button,
+            "export_chart_button": export_chart_button,
+            "chart": chart,
         },
     )
 
 
 def _session_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
+    QHBoxLayout = qt["QHBoxLayout"]
     QLabel = qt["QLabel"]
     QListWidget = qt["QListWidget"]
     QListWidgetItem = qt["QListWidgetItem"]
     QPushButton = qt["QPushButton"]
+    QTextEdit = qt["QTextEdit"]
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
 
@@ -277,37 +320,97 @@ def _session_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     layout = QVBoxLayout(panel)
     active = QLabel()
     count = QLabel()
+    summary = QLabel()
     database = QLabel()
     export_status = QLabel()
     recent = QListWidget()
-    export_csv = QPushButton("Export Last Session CSV")
-    export_json = QPushButton("Export Last Session JSON")
+    notes = QTextEdit()
+    notes.setReadOnly(True)
+    notes.setFixedHeight(90)
+    markers = QListWidget()
+    chart = build_reading_chart(
+        title="Session Replay",
+        empty_text="Select a recorded session to inspect its replay chart and markers.",
+    )
+    export_csv = QPushButton("Export Session CSV")
+    export_json = QPushButton("Export Session JSON")
+    export_chart = QPushButton("Export Session Chart")
+
+    def on_selection_changed() -> None:
+        item = recent.currentItem()
+        if item is None:
+            return
+        _safe_call(runtime, lambda: runtime.presenter.select_session(item.data(0x0100)))
 
     export_csv.clicked.connect(
         lambda: _safe_call(
             runtime,
-            lambda: runtime.presenter.export_session_csv("exports/desktop_session.csv"),
+            lambda: runtime.presenter.export_session_csv(
+                _session_export_path(runtime, "csv"),
+                session_id=_selected_session_id(runtime),
+            ),
         )
     )
     export_json.clicked.connect(
         lambda: _safe_call(
             runtime,
-            lambda: runtime.presenter.export_session_json("exports/desktop_session.json"),
+            lambda: runtime.presenter.export_session_json(
+                _session_export_path(runtime, "json"),
+                session_id=_selected_session_id(runtime),
+            ),
         )
     )
+    export_chart.clicked.connect(
+        lambda: _safe_call(runtime, lambda: _export_chart(runtime, chart, _session_chart_export_path(runtime)))
+    )
+    recent.itemSelectionChanged.connect(on_selection_changed)
 
-    for widget in (active, count, database, export_status, recent, export_csv, export_json):
-        layout.addWidget(widget)
+    session_list_column = QVBoxLayout()
+    session_list_column.addWidget(QLabel("Recent Sessions"))
+    session_list_column.addWidget(recent)
+
+    detail_column = QVBoxLayout()
+    for widget in (
+        active,
+        count,
+        summary,
+        database,
+        export_status,
+        chart.widget,
+        QLabel("Session Notes"),
+        notes,
+        QLabel("Markers"),
+        markers,
+    ):
+        detail_column.addWidget(widget)
+
+    content_row = QHBoxLayout()
+    content_row.addLayout(session_list_column, 2)
+    content_row.addLayout(detail_column, 5)
+    layout.addLayout(content_row)
+
+    actions = QHBoxLayout()
+    actions.addWidget(export_csv)
+    actions.addWidget(export_json)
+    actions.addWidget(export_chart)
+    layout.addLayout(actions)
 
     return _PanelRefs(
         panel=panel,
         refs={
             "active": active,
             "count": count,
+            "summary": summary,
             "database": database,
             "export_status": export_status,
             "recent": recent,
+            "notes": notes,
+            "markers": markers,
             "list_item_cls": QListWidgetItem,
+            "export_csv": export_csv,
+            "export_json": export_json,
+            "export_chart": export_chart,
+            "chart": chart,
         },
     )
 
@@ -394,9 +497,21 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["measurement"].setText(live.measurement_label)
     panel.refs["status"].setText(f"Status: {live.status_text}")
     panel.refs["connection"].setText(f"Connection: {live.connection_text}")
+    panel.refs["session"].setText(f"Session: {live.session_title or 'No active session'}")
     panel.refs["last_updated"].setText(f"Last Update: {live.last_updated_text}")
+    panel.refs["summary"].setText(live.summary_text)
+    panel.refs["marker_count"].setText(live.marker_count_text)
     panel.refs["start_button"].setEnabled(not live.is_logging)
     panel.refs["stop_button"].setEnabled(live.is_logging)
+    panel.refs["add_marker_button"].setEnabled(live.is_logging)
+    panel.refs["marker_input"].setEnabled(live.is_logging)
+    panel.refs["export_chart_button"].setEnabled(bool(live.chart_points))
+    panel.refs["chart"].set_data(
+        live.chart_points,
+        live.marker_points,
+        unit_text=live.unit_text,
+        measurement_label=live.measurement_label,
+    )
     title_input = panel.refs["title_input"]
     if live.session_title and not title_input.text():
         title_input.setText(live.session_title)
@@ -404,8 +519,9 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
 
 def _refresh_session(runtime, panel: _PanelRefs) -> None:
     session = runtime.presenter.session_view_model()
-    panel.refs["active"].setText(f"Active/Last Session: {session.active_title_text}")
+    panel.refs["active"].setText(f"Selected Session: {session.active_title_text}")
     panel.refs["count"].setText(session.reading_count_text)
+    panel.refs["summary"].setText(session.selected_summary_text)
     panel.refs["database"].setText(f"Database: {session.database_path_text}")
     panel.refs["export_status"].setText(session.export_status_text)
     recent = panel.refs["recent"]
@@ -419,6 +535,34 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
             item = item_cls(label)
             item.setData(0x0100, entry.session_id)
             recent.addItem(item)
+    if session.selected_session_id is not None:
+        for index in range(recent.count()):
+            item = recent.item(index)
+            if item.data(0x0100) == session.selected_session_id:
+                if recent.currentRow() != index:
+                    recent.setCurrentRow(index)
+                break
+    notes = panel.refs["notes"]
+    if notes.toPlainText() != session.selected_session_notes:
+        notes.setPlainText(session.selected_session_notes)
+    markers = panel.refs["markers"]
+    current_marker_ids = [markers.item(index).data(0x0100) for index in range(markers.count())]
+    desired_marker_ids = [marker.marker_id for marker in session.selected_markers]
+    if current_marker_ids != desired_marker_ids:
+        markers.clear()
+        for marker in session.selected_markers:
+            item = item_cls(f"{marker.timestamp_text} | {marker.label} | {marker.note}")
+            item.setData(0x0100, marker.marker_id)
+            markers.addItem(item)
+    panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
+    panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
+    panel.refs["export_chart"].setEnabled(bool(session.chart_points))
+    panel.refs["chart"].set_data(
+        session.chart_points,
+        session.marker_points,
+        unit_text=session.selected_unit_text,
+        measurement_label="Session Replay",
+    )
 
 
 def _refresh_settings(runtime, panel: _PanelRefs) -> None:
@@ -451,3 +595,40 @@ def _handle_future(runtime, future) -> None:
 def _text_or_none(text: str) -> str | None:
     stripped = text.strip()
     return stripped or None
+
+
+def _add_live_marker(runtime, marker_input) -> None:
+    note = _text_or_none(marker_input.text())
+    if note is None:
+        raise RuntimeError("Enter a marker note before adding a marker.")
+    runtime.presenter.add_marker(note)
+    marker_input.clear()
+
+
+def _selected_session_id(runtime) -> str | None:
+    return runtime.presenter.session_view_model().selected_session_id
+
+
+def _export_directory(runtime) -> Path:
+    configured = runtime.presenter.settings_view_model().export_directory_text.strip()
+    return Path(configured or "exports")
+
+
+def _session_export_path(runtime, extension: str) -> Path:
+    session_id = _selected_session_id(runtime) or "desktop-session"
+    return _export_directory(runtime) / f"session-{session_id}.{extension}"
+
+
+def _session_chart_export_path(runtime) -> Path:
+    session_id = _selected_session_id(runtime) or "desktop-session"
+    return _export_directory(runtime) / f"session-{session_id}-chart.png"
+
+
+def _live_chart_export_path(runtime) -> Path:
+    return _export_directory(runtime) / "live-chart.png"
+
+
+def _export_chart(runtime, chart, path: Path) -> str:
+    exported = chart.export_png(path)
+    runtime.presenter.set_export_status(f"Chart image exported to {exported}")
+    return exported

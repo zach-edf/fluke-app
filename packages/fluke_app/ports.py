@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
+from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 
@@ -31,4 +32,12 @@ class ReadingRepository(Protocol):
 
 class ReadingExporter(Protocol):
     def export(self, session: Session, readings: list[Reading], path: Path) -> Path:
+        ...
+
+
+class MarkerRepository(Protocol):
+    def append(self, session_id: str, marker: SessionMarker) -> SessionMarker:
+        ...
+
+    def list_for_session(self, session_id: str) -> list[SessionMarker]:
         ...

@@ -21,10 +21,11 @@ async def main() -> int:
         return 0
 
     store = FlukeStore(Path("data/sdk-example.db"))
-    recorder = SessionRecorder(store.sessions, store.readings)
+    recorder = SessionRecorder(store.sessions, store.readings, store.markers)
     export_service = ExportService(
         store.sessions,
         store.readings,
+        store.markers,
         SessionCsvExporter(),
         SessionJsonExporter(device_repo=store.devices),
     )

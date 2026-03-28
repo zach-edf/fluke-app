@@ -43,10 +43,22 @@ CREATE TABLE IF NOT EXISTS readings (
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS session_markers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    timestamp_utc TEXT NOT NULL,
+    label TEXT NOT NULL,
+    note TEXT NOT NULL,
+    source TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_readings_session_time
     ON readings(session_id, timestamp_utc);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_device_started
     ON sessions(device_id, started_at);
-"""
 
+CREATE INDEX IF NOT EXISTS idx_markers_session_time
+    ON session_markers(session_id, timestamp_utc);
+"""

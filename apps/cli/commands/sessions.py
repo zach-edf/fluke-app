@@ -51,6 +51,7 @@ async def handle_export(args: argparse.Namespace) -> int:
         service = ExportService(
             store.sessions,
             store.readings,
+            store.markers,
             SessionCsvExporter(),
             SessionJsonExporter(device_repo=store.devices),
         )

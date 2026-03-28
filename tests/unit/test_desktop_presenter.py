@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from uuid import uuid4
@@ -54,6 +55,7 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             )
             await initial.run(adapter, "meter-desktop")
             self.assertEqual(presenter.live_view_model().main_value, "12.34")
+            self.assertEqual(len(presenter.live_view_model().chart_points), 1)
 
             session_id = presenter.start_logging(title="Desktop Replay")
             logged = ReplayScenario(
@@ -63,9 +65,15 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             await logged.run(adapter, "meter-desktop")
+            presenter.add_marker("Clamp shifted")
 
             self.assertEqual(presenter.session_view_model().reading_count_text, "1 readings")
             self.assertTrue(presenter.live_view_model().is_logging)
+            self.assertEqual(presenter.live_view_model().marker_count_text, "1 markers")
+            self.assertIn("Samples 2", presenter.live_view_model().summary_text)
+            self.assertEqual(len(presenter.session_view_model().selected_markers), 1)
+            self.assertEqual(len(presenter.session_view_model().chart_points), 1)
+            self.assertEqual(presenter.session_view_model().selected_unit_text, "V")
 
             presenter.stop_logging()
             self.assertFalse(presenter.live_view_model().is_logging)
@@ -74,6 +82,9 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             json_path = presenter.export_session_json(tmp / "desktop.json", session_id=session_id)
             self.assertTrue(Path(csv_path).exists())
             self.assertTrue(Path(json_path).exists())
+            payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
+            self.assertEqual(payload["statistics"]["reading_count"], 1)
+            self.assertEqual(len(payload["markers"]), 1)
             self.assertIn(session_id, [row.session_id for row in presenter.session_view_model().recent_sessions])
 
             presenter.set_export_directory(tmp / "exports")

@@ -29,6 +29,14 @@ class RecentDeviceViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionMarkerViewModel:
+    marker_id: int | None
+    timestamp_text: str
+    label: str
+    note: str
+
+
+@dataclass(frozen=True, slots=True)
 class LiveReadingViewModel:
     main_value: str = "--"
     unit_text: str = ""
@@ -38,6 +46,10 @@ class LiveReadingViewModel:
     is_logging: bool = False
     session_title: str | None = None
     last_updated_text: str = "-"
+    summary_text: str = "Min - | Max - | Avg -"
+    marker_count_text: str = "0 markers"
+    chart_points: tuple[tuple[float, float], ...] = ()
+    marker_points: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +73,18 @@ class DiscoveryViewModel:
 @dataclass(frozen=True, slots=True)
 class SessionViewModel:
     active_session_id: str | None = None
+    selected_session_id: str | None = None
     active_title_text: str = "No active session"
     reading_count_text: str = "0 readings"
     export_status_text: str = ""
     database_path_text: str = ""
     recent_sessions: tuple[SessionSummaryViewModel, ...] = ()
+    selected_summary_text: str = "Min - | Max - | Avg -"
+    selected_unit_text: str = ""
+    selected_session_notes: str = ""
+    selected_markers: tuple[SessionMarkerViewModel, ...] = ()
+    chart_points: tuple[tuple[float, float], ...] = ()
+    marker_points: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

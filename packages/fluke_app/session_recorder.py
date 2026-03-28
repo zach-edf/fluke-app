@@ -4,21 +4,30 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fluke_app.ports import ReadingRepository, SessionRepository
+from fluke_app.ports import MarkerRepository, ReadingRepository, SessionRepository
+from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 
 
 class SessionRecorder:
-    def __init__(self, session_repo: SessionRepository, reading_repo: ReadingRepository) -> None:
+    def __init__(
+        self,
+        session_repo: SessionRepository,
+        reading_repo: ReadingRepository,
+        marker_repo: MarkerRepository | None = None,
+    ) -> None:
         self._session_repo = session_repo
         self._reading_repo = reading_repo
+        self._marker_repo = marker_repo
         self._active_session: Session | None = None
         self._reading_count = 0
+        self._marker_count = 0
 
     def start(self, session: Session) -> Session:
         self._active_session = session
         self._reading_count = 0
+        self._marker_count = 0
         self._session_repo.create(session)
         return session
 
@@ -38,11 +47,38 @@ class SessionRecorder:
         self._reading_repo.append(self._active_session.session_id, reading)
         self._reading_count += 1
 
+    def add_marker(
+        self,
+        note: str,
+        *,
+        label: str = "note",
+        source: str = "manual",
+        timestamp_utc: datetime | None = None,
+    ) -> SessionMarker:
+        if self._active_session is None:
+            raise RuntimeError("Start logging before adding a marker.")
+        if self._marker_repo is None:
+            raise RuntimeError("Marker storage is not configured.")
+
+        marker = SessionMarker(
+            session_id=self._active_session.session_id,
+            timestamp_utc=timestamp_utc or datetime.now(timezone.utc),
+            label=label,
+            note=note,
+            source=source,
+        )
+        stored = self._marker_repo.append(self._active_session.session_id, marker)
+        self._marker_count += 1
+        return stored
+
     def active_session(self) -> Session | None:
         return self._active_session
 
     def reading_count(self) -> int:
         return self._reading_count
+
+    def marker_count(self) -> int:
+        return self._marker_count
 
 
 def new_session(

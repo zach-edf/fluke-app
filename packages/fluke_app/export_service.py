@@ -4,9 +4,11 @@ import csv
 import json
 from pathlib import Path
 
-from fluke_app.ports import ReadingExporter, ReadingRepository, SessionRepository
+from fluke_app.ports import MarkerRepository, ReadingExporter, ReadingRepository, SessionRepository
+from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.services.statistics import summarize_readings
 
 
 class ExportService:
@@ -14,11 +16,13 @@ class ExportService:
         self,
         session_repo: SessionRepository,
         reading_repo: ReadingRepository,
+        marker_repo: MarkerRepository | None,
         csv_exporter: ReadingExporter,
         json_exporter: ReadingExporter,
     ) -> None:
         self._session_repo = session_repo
         self._reading_repo = reading_repo
+        self._marker_repo = marker_repo
         self._csv_exporter = csv_exporter
         self._json_exporter = json_exporter
 
@@ -28,6 +32,8 @@ class ExportService:
 
     def export_json(self, session_id: str, path: str | Path) -> str:
         session, readings = self._load(session_id)
+        if isinstance(self._json_exporter, SessionJsonExporter):
+            self._json_exporter.set_markers(self._load_markers(session_id))
         return str(self._json_exporter.export(session, readings, Path(path)))
 
     def _load(self, session_id: str) -> tuple[object, list[object]]:
@@ -36,6 +42,11 @@ class ExportService:
             raise RuntimeError(f"Unknown session {session_id!r}.")
         readings = self._reading_repo.list_for_session(session_id)
         return session, readings
+
+    def _load_markers(self, session_id: str) -> list[SessionMarker]:
+        if self._marker_repo is None:
+            return []
+        return self._marker_repo.list_for_session(session_id)
 
 
 class SessionCsvExporter:
@@ -79,12 +90,17 @@ class SessionCsvExporter:
 class SessionJsonExporter:
     def __init__(self, device_repo: object | None = None) -> None:
         self._device_repo = device_repo
+        self._markers: list[SessionMarker] = []
+
+    def set_markers(self, markers: list[SessionMarker]) -> None:
+        self._markers = list(markers)
 
     def export(self, session: Session, readings: list[Reading], path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         device = None
         if self._device_repo is not None:
             device = self._device_repo.get(session.device_id)
+        stats = summarize_readings(readings)
 
         payload = {
             "session": {
@@ -97,6 +113,14 @@ class SessionJsonExporter:
                 "tags": list(session.tags),
                 "app_version": session.app_version,
                 "profile_id": session.profile_id,
+            },
+            "statistics": {
+                "reading_count": stats.reading_count,
+                "numeric_count": stats.numeric_count,
+                "min_value": stats.min_value,
+                "max_value": stats.max_value,
+                "avg_value": stats.avg_value,
+                "duration_s": stats.duration_s,
             },
             "device": None
             if device is None
@@ -126,6 +150,16 @@ class SessionJsonExporter:
                     "metadata": dict(reading.metadata),
                 }
                 for reading in readings
+            ],
+            "markers": [
+                {
+                    "marker_id": marker.marker_id,
+                    "timestamp_utc": marker.timestamp_utc.isoformat(),
+                    "label": marker.label,
+                    "note": marker.note,
+                    "source": marker.source,
+                }
+                for marker in self._markers
             ],
         }
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
