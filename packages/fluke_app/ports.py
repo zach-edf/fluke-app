@@ -6,6 +6,7 @@ from typing import Protocol
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.models.workflow import WorkflowRun, WorkflowStepResult
 
 
 class SessionRepository(Protocol):
@@ -40,4 +41,29 @@ class MarkerRepository(Protocol):
         ...
 
     def list_for_session(self, session_id: str) -> list[SessionMarker]:
+        ...
+
+
+class WorkflowRunRepository(Protocol):
+    def create(self, run: WorkflowRun) -> WorkflowRun:
+        ...
+
+    def update(self, run: WorkflowRun) -> WorkflowRun:
+        ...
+
+    def get(self, run_id: str) -> WorkflowRun | None:
+        ...
+
+    def list_recent(self, limit: int = 20) -> list[WorkflowRun]:
+        ...
+
+    def list_for_session(self, session_id: str) -> list[WorkflowRun]:
+        ...
+
+
+class WorkflowStepResultRepository(Protocol):
+    def append(self, result: WorkflowStepResult) -> WorkflowStepResult:
+        ...
+
+    def list_for_run(self, run_id: str) -> list[WorkflowStepResult]:
         ...

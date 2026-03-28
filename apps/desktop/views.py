@@ -89,11 +89,13 @@ def create_main_window(runtime) -> "QWidget":
             self._discovery = _discovery_panel(runtime, qt)
             self._live = _live_panel(runtime, qt)
             self._session = _session_panel(runtime, qt)
+            self._workflow = _workflow_panel(runtime, qt)
             self._settings = _settings_panel(runtime, qt)
             tabs.addTab(self._home.panel, "Home")
             tabs.addTab(self._discovery.panel, "Device Discovery")
             tabs.addTab(self._live.panel, "Live Reading")
             tabs.addTab(self._session.panel, "Session")
+            tabs.addTab(self._workflow.panel, "Workflows")
             tabs.addTab(self._settings.panel, "Settings")
             outer.addWidget(tabs)
             self.setCentralWidget(root)
@@ -113,6 +115,7 @@ def create_main_window(runtime) -> "QWidget":
             _refresh_discovery(runtime, self._discovery)
             _refresh_live(runtime, self._live)
             _refresh_session(runtime, self._session)
+            _refresh_workflow(runtime, self._workflow)
             _refresh_settings(runtime, self._settings)
 
     return MainWindow()
@@ -446,6 +449,113 @@ def _settings_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     )
 
 
+def _workflow_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
+    QHBoxLayout = qt["QHBoxLayout"]
+    QLabel = qt["QLabel"]
+    QLineEdit = qt["QLineEdit"]
+    QListWidget = qt["QListWidget"]
+    QListWidgetItem = qt["QListWidgetItem"]
+    QPushButton = qt["QPushButton"]
+    QWidget = qt["QWidget"]
+    QVBoxLayout = qt["QVBoxLayout"]
+
+    panel = QWidget()
+    layout = QVBoxLayout(panel)
+
+    status = QLabel()
+    title = QLabel()
+    workflow_list = QListWidget()
+    description = QLabel()
+    progress = QLabel()
+    current_step = QLabel()
+    instruction = QLabel()
+    requirement = QLabel()
+    active_session = QLabel()
+    latest_capture = QLabel()
+    run_result = QLabel()
+    note_input = QLineEdit()
+    note_input.setPlaceholderText("Optional step note")
+    completed_steps = QListWidget()
+    recent_runs = QListWidget()
+    start_button = QPushButton("Start Workflow")
+    complete_button = QPushButton("Complete Step")
+    skip_button = QPushButton("Skip Step")
+    cancel_button = QPushButton("Cancel Workflow")
+
+    def on_selection_changed() -> None:
+        item = workflow_list.currentItem()
+        runtime.presenter.select_workflow(None if item is None else item.data(0x0100))
+
+    workflow_list.itemSelectionChanged.connect(on_selection_changed)
+    start_button.clicked.connect(lambda: _safe_call(runtime, lambda: runtime.presenter.start_workflow()))
+    complete_button.clicked.connect(
+        lambda: _safe_call(runtime, lambda: _complete_workflow_step(runtime, note_input))
+    )
+    skip_button.clicked.connect(lambda: _safe_call(runtime, lambda: _skip_workflow_step(runtime, note_input)))
+    cancel_button.clicked.connect(lambda: _safe_call(runtime, runtime.presenter.cancel_workflow))
+
+    left = QVBoxLayout()
+    left.addWidget(QLabel("Available Workflows"))
+    left.addWidget(workflow_list)
+    left.addWidget(start_button)
+
+    actions = QHBoxLayout()
+    actions.addWidget(complete_button)
+    actions.addWidget(skip_button)
+    actions.addWidget(cancel_button)
+
+    right = QVBoxLayout()
+    for widget in (
+        status,
+        title,
+        description,
+        progress,
+        current_step,
+        instruction,
+        requirement,
+        active_session,
+        latest_capture,
+        run_result,
+        note_input,
+        QLabel("Completed Steps"),
+        completed_steps,
+        QLabel("Recent Workflow Runs"),
+        recent_runs,
+    ):
+        right.addWidget(widget)
+    right.addLayout(actions)
+
+    content = QHBoxLayout()
+    content.addLayout(left, 2)
+    content.addLayout(right, 5)
+    layout.addLayout(content)
+
+    return _PanelRefs(
+        panel=panel,
+        refs={
+            "status": status,
+            "title": title,
+            "workflow_list": workflow_list,
+            "description": description,
+            "progress": progress,
+            "current_step": current_step,
+            "instruction": instruction,
+            "requirement": requirement,
+            "active_session": active_session,
+            "latest_capture": latest_capture,
+            "run_result": run_result,
+            "note_input": note_input,
+            "completed_steps": completed_steps,
+            "recent_runs": recent_runs,
+            "start_button": start_button,
+            "complete_button": complete_button,
+            "skip_button": skip_button,
+            "cancel_button": cancel_button,
+            "list_item_cls": QListWidgetItem,
+        },
+    )
+
+
 def _refresh_home(runtime, panel: _PanelRefs) -> None:
     home = runtime.presenter.home_view_model()
     panel.refs["title"].setText(home.title)
@@ -574,6 +684,64 @@ def _refresh_settings(runtime, panel: _PanelRefs) -> None:
         export_dir_input.setText(settings.export_directory_text)
 
 
+def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
+    workflow = runtime.presenter.workflow_view_model()
+    panel.refs["status"].setText(workflow.status_text)
+    panel.refs["title"].setText(workflow.current_title_text)
+    panel.refs["description"].setText(workflow.current_description_text)
+    panel.refs["progress"].setText(f"Progress: {workflow.progress_text}")
+    panel.refs["current_step"].setText(f"Current Step: {workflow.current_step_title}")
+    panel.refs["instruction"].setText(workflow.current_instruction_text)
+    panel.refs["requirement"].setText(workflow.current_requirement_text)
+    panel.refs["active_session"].setText(f"Session: {workflow.active_session_text}")
+    panel.refs["latest_capture"].setText(workflow.latest_capture_text)
+    panel.refs["run_result"].setText(f"Run Result: {workflow.run_result_text}")
+
+    workflow_list = panel.refs["workflow_list"]
+    item_cls = panel.refs["list_item_cls"]
+    current_ids = [workflow_list.item(index).data(0x0100) for index in range(workflow_list.count())]
+    desired_ids = [item.workflow_id for item in workflow.workflows]
+    if current_ids != desired_ids:
+        workflow_list.clear()
+        for item in workflow.workflows:
+            row = item_cls(f"{item.title} | {item.category} | {item.step_count_text}")
+            row.setData(0x0100, item.workflow_id)
+            workflow_list.addItem(row)
+    if workflow.selected_workflow_id is not None:
+        for index in range(workflow_list.count()):
+            item = workflow_list.item(index)
+            if item.data(0x0100) == workflow.selected_workflow_id:
+                if workflow_list.currentRow() != index:
+                    workflow_list.setCurrentRow(index)
+                break
+
+    completed_steps = panel.refs["completed_steps"]
+    current_step_ids = [completed_steps.item(index).data(0x0100) for index in range(completed_steps.count())]
+    desired_step_ids = [item.step_id for item in workflow.completed_steps]
+    if current_step_ids != desired_step_ids:
+        completed_steps.clear()
+        for item in workflow.completed_steps:
+            row = item_cls(f"{item.title} | {item.status_text} | {item.detail_text}")
+            row.setData(0x0100, item.step_id)
+            completed_steps.addItem(row)
+
+    recent_runs = panel.refs["recent_runs"]
+    current_run_ids = [recent_runs.item(index).data(0x0100) for index in range(recent_runs.count())]
+    desired_run_ids = [item.run_id for item in workflow.recent_runs]
+    if current_run_ids != desired_run_ids:
+        recent_runs.clear()
+        for item in workflow.recent_runs:
+            row = item_cls(f"{item.title} | {item.started_at_text} | {item.result_text} | session={item.session_id}")
+            row.setData(0x0100, item.run_id)
+            recent_runs.addItem(row)
+
+    panel.refs["start_button"].setEnabled(workflow.selected_workflow_id is not None and not workflow.is_running)
+    panel.refs["complete_button"].setEnabled(workflow.is_running)
+    panel.refs["skip_button"].setEnabled(workflow.is_running)
+    panel.refs["cancel_button"].setEnabled(workflow.is_running)
+    panel.refs["note_input"].setEnabled(workflow.is_running)
+
+
 def _submit(runtime, coro) -> None:
     future = runtime.submit(coro)
     future.add_done_callback(lambda fut: _handle_future(runtime, fut))
@@ -632,3 +800,15 @@ def _export_chart(runtime, chart, path: Path) -> str:
     exported = chart.export_png(path)
     runtime.presenter.set_export_status(f"Chart image exported to {exported}")
     return exported
+
+
+def _complete_workflow_step(runtime, note_input) -> None:
+    note = _text_or_none(note_input.text())
+    runtime.presenter.complete_workflow_step(note=note)
+    note_input.clear()
+
+
+def _skip_workflow_step(runtime, note_input) -> None:
+    note = _text_or_none(note_input.text())
+    runtime.presenter.skip_workflow_step(note=note)
+    note_input.clear()

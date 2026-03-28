@@ -61,4 +61,33 @@ CREATE INDEX IF NOT EXISTS idx_sessions_device_started
 
 CREATE INDEX IF NOT EXISTS idx_markers_session_time
     ON session_markers(session_id, timestamp_utc);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    result TEXT NOT NULL,
+    workflow_title TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS workflow_step_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    completed_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT,
+    reading_json TEXT,
+    FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_session_started
+    ON workflow_runs(session_id, started_at);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_step_results_run_step
+    ON workflow_step_results(run_id, step_index, completed_at);
 """

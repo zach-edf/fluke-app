@@ -37,6 +37,34 @@ class SessionMarkerViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkflowDefinitionViewModel:
+    workflow_id: str
+    title: str
+    category: str
+    description: str
+    step_count_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowStepViewModel:
+    step_id: str
+    title: str
+    instruction: str
+    status_text: str
+    detail_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowRunSummaryViewModel:
+    run_id: str
+    workflow_id: str
+    title: str
+    session_id: str
+    started_at_text: str
+    result_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class LiveReadingViewModel:
     main_value: str = "--"
     unit_text: str = ""
@@ -92,3 +120,22 @@ class SettingsViewModel:
     database_path_text: str = ""
     export_directory_text: str = ""
     diagnostics_text: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowViewModel:
+    status_text: str = "Select a workflow to review the steps."
+    selected_workflow_id: str | None = None
+    workflows: tuple[WorkflowDefinitionViewModel, ...] = ()
+    current_title_text: str = "No workflow selected"
+    current_description_text: str = ""
+    progress_text: str = "0/0 steps"
+    current_step_title: str = "No active step"
+    current_instruction_text: str = ""
+    current_requirement_text: str = ""
+    active_session_text: str = "No workflow session"
+    latest_capture_text: str = "No captured step yet"
+    run_result_text: str = ""
+    is_running: bool = False
+    completed_steps: tuple[WorkflowStepViewModel, ...] = ()
+    recent_runs: tuple[WorkflowRunSummaryViewModel, ...] = ()

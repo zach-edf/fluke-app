@@ -97,6 +97,68 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
+    async def test_presenter_runs_guided_workflow_against_live_readings(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-workflow.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-workflow",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:FF",
+                    rssi=-49,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-workflow")
+
+            presenter.select_workflow("battery_pack_check_v1")
+            run_id = presenter.start_workflow()
+            self.assertTrue(presenter.live_view_model().is_logging)
+            self.assertTrue(presenter.workflow_view_model().is_running)
+
+            presenter.complete_workflow_step(note="Meter configured.")
+            self.assertEqual(presenter.workflow_view_model().progress_text, "1/4 steps")
+
+            reading_1 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("19.80 V", "dc")),
+                )
+            )
+            await reading_1.run(adapter, "meter-workflow")
+            presenter.complete_workflow_step(note="Open-circuit reading.")
+
+            reading_2 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("18.95 V", "dc")),
+                )
+            )
+            await reading_2.run(adapter, "meter-workflow")
+            presenter.complete_workflow_step(note="Loaded reading.")
+            presenter.complete_workflow_step(note="Voltage sag is acceptable.")
+
+            workflow_vm = presenter.workflow_view_model()
+            self.assertFalse(workflow_vm.is_running)
+            self.assertIn("Completed Battery Pack Check", workflow_vm.status_text)
+            self.assertEqual(len(workflow_vm.completed_steps), 4)
+            self.assertEqual(workflow_vm.recent_runs[0].run_id, run_id)
+            self.assertEqual(workflow_vm.recent_runs[0].result_text, "Completed")
+            self.assertFalse(presenter.live_view_model().is_logging)
+            self.assertGreaterEqual(len(store.markers.list_for_session(store.workflow_runs.get(run_id).session_id)), 5)
+        finally:
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

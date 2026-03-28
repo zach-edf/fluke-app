@@ -16,13 +16,19 @@ from apps.desktop.viewmodels import (
     SettingsViewModel,
     SessionSummaryViewModel,
     SessionViewModel,
+    WorkflowDefinitionViewModel,
+    WorkflowRunSummaryViewModel,
+    WorkflowStepViewModel,
+    WorkflowViewModel,
 )
-from fluke_app import ExportService, SessionRecorder, new_session
+from fluke_app import ExportService, SessionRecorder, WorkflowRunner, load_workflow_catalog, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
+from fluke_core.enums import WorkflowRunResult, WorkflowStepResultStatus
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.models.workflow import WorkflowDefinition, WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
 from fluke_core.services.statistics import summarize_readings
 
 
@@ -56,6 +62,15 @@ class AppPresenter:
             export_directory_text=str(self._export_directory),
             diagnostics_text="PySide6 and BLE runtime configured.",
         )
+        self._workflow_catalog = load_workflow_catalog()
+        self._workflow_runner = WorkflowRunner(
+            self._workflow_catalog,
+            store.workflow_runs,
+            store.workflow_step_results,
+        )
+        self._workflow = WorkflowViewModel()
+        self._workflow_status_message = "Select a workflow to review the steps."
+        self._workflow_owned_session_id: str | None = None
         self._current_device: DeviceInfo | None = None
         self._last_completed_session_id: str | None = None
         self._live_points: deque[tuple[float, float]] = deque(maxlen=300)
@@ -66,6 +81,7 @@ class AppPresenter:
         self._device_manager.subscribe_readings(self.on_reading)
         self.refresh_recent_devices()
         self.refresh_recent_sessions()
+        self.refresh_workflows()
 
     def home_view_model(self) -> HomeViewModel:
         with self._lock:
@@ -86,6 +102,10 @@ class AppPresenter:
     def settings_view_model(self) -> SettingsViewModel:
         with self._lock:
             return replace(self._settings)
+
+    def workflow_view_model(self) -> WorkflowViewModel:
+        with self._lock:
+            return replace(self._workflow)
 
     async def scan_devices(self, timeout_s: float = 5.0) -> tuple[ScannedDeviceViewModel, ...]:
         self._set_discovery(status_text="Scanning...")
@@ -152,6 +172,10 @@ class AppPresenter:
         return await self.connect_device(device_id=last.device_id, profile_id=last.profile_id or None)
 
     async def disconnect_device(self) -> None:
+        if self._workflow_runner.active_state() is not None:
+            self._workflow_runner.cancel()
+            self._workflow_owned_session_id = None
+            self._workflow_status_message = "Workflow cancelled because the device disconnected."
         if self._recorder.active_session() is not None:
             self.stop_logging()
         await self._device_manager.disconnect()
@@ -179,6 +203,7 @@ class AppPresenter:
             )
             self._discovery = replace(self._discovery, status_text="Disconnected")
             self._settings = replace(self._settings, diagnostics_text="Disconnected.")
+        self.refresh_workflows()
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -283,6 +308,8 @@ class AppPresenter:
             self._session = replace(self._session, export_status_text=message)
 
     async def shutdown(self) -> None:
+        if self._workflow_runner.active_state() is not None:
+            self._workflow_runner.cancel()
         if self._recorder.active_session() is not None:
             self.stop_logging()
         await self._device_manager.disconnect()
@@ -322,6 +349,86 @@ class AppPresenter:
                     marker_points=(),
                 )
 
+    def refresh_workflows(self, limit: int = 10) -> None:
+        definitions = self._workflow_catalog.list()
+        definition_rows = tuple(_workflow_definition_vm(definition) for definition in definitions)
+        active_state = self._workflow_runner.active_state()
+        selected_id = self.workflow_view_model().selected_workflow_id
+        if active_state is not None:
+            selected_id = active_state.definition.workflow_id
+        elif selected_id is None and definitions:
+            selected_id = definitions[0].workflow_id
+        selected_definition = None if selected_id is None else self._workflow_catalog.get(selected_id)
+        recent_run_models = self._workflow_runner.list_recent_runs(limit=limit)
+        recent_runs = tuple(_workflow_run_vm(run) for run in recent_run_models)
+        selected_recent_run = None
+        if selected_id is not None:
+            selected_recent_run = next((run for run in recent_run_models if run.workflow_id == selected_id), None)
+
+        current_title = "No workflow selected"
+        current_description = ""
+        progress_text = "0/0 steps"
+        current_step_title = "No active step"
+        current_instruction = ""
+        current_requirement = ""
+        active_session_text = "No workflow session"
+        latest_capture_text = "No captured step yet"
+        run_result_text = ""
+        completed_steps: tuple[WorkflowStepViewModel, ...] = ()
+        is_running = False
+
+        if selected_definition is not None:
+            current_title = selected_definition.title
+            current_description = selected_definition.description
+            progress_text = f"0/{len(selected_definition.steps)} steps"
+
+        if active_state is not None:
+            selected_definition = active_state.definition
+            current_title = selected_definition.title
+            current_description = selected_definition.description
+            progress_text = active_state.progress_text
+            current_step = active_state.current_step
+            current_step_title = "Workflow complete" if current_step is None else current_step.title
+            current_instruction = "" if current_step is None else current_step.instruction
+            current_requirement = "" if current_step is None else _workflow_requirement_text(current_step)
+            active_session_text = active_state.run.session_id
+            latest_capture_text = _latest_capture_text(active_state.completed_steps)
+            run_result_text = active_state.run.result.value.replace("_", " ").title()
+            completed_steps = tuple(_workflow_step_vm(result, selected_definition) for result in active_state.completed_steps)
+            is_running = active_state.run.result == WorkflowRunResult.IN_PROGRESS
+        elif selected_definition is not None and selected_recent_run is not None:
+            results = self._workflow_runner.results_for_run(selected_recent_run.run_id)
+            progress_text = f"{len(results)}/{len(selected_definition.steps)} steps"
+            current_step_title = (
+                "Workflow complete"
+                if selected_recent_run.result == WorkflowRunResult.COMPLETED
+                else "No active step"
+            )
+            current_requirement = ""
+            active_session_text = selected_recent_run.session_id
+            latest_capture_text = _latest_capture_text(results)
+            run_result_text = selected_recent_run.result.value.replace("_", " ").title()
+            completed_steps = tuple(_workflow_step_vm(result, selected_definition) for result in results)
+
+        with self._lock:
+            self._workflow = WorkflowViewModel(
+                status_text=self._workflow_status_message,
+                selected_workflow_id=selected_id,
+                workflows=definition_rows,
+                current_title_text=current_title,
+                current_description_text=current_description,
+                progress_text=progress_text,
+                current_step_title=current_step_title,
+                current_instruction_text=current_instruction,
+                current_requirement_text=current_requirement,
+                active_session_text=active_session_text,
+                latest_capture_text=latest_capture_text,
+                run_result_text=run_result_text,
+                is_running=is_running,
+                completed_steps=completed_steps,
+                recent_runs=recent_runs,
+            )
+
     def report_error(self, message: str) -> None:
         with self._lock:
             self._home = replace(self._home, message_text=message, connection_text=f"Error: {message}")
@@ -329,10 +436,88 @@ class AppPresenter:
             self._session = replace(self._session, export_status_text=message)
             self._live = replace(self._live, status_text="Error")
             self._settings = replace(self._settings, diagnostics_text=message)
+            self._workflow = replace(self._workflow, status_text=message)
+        self._workflow_status_message = message
 
     def select_device(self, device_id: str | None) -> None:
         with self._lock:
             self._discovery = replace(self._discovery, selected_device_id=device_id)
+
+    def select_workflow(self, workflow_id: str | None) -> None:
+        with self._lock:
+            self._workflow = replace(self._workflow, selected_workflow_id=workflow_id)
+        if workflow_id is not None:
+            definition = self._workflow_catalog.get(workflow_id)
+            if definition is not None:
+                self._workflow_status_message = f"Ready to start {definition.title}."
+        self.refresh_workflows()
+
+    def start_workflow(self, workflow_id: str | None = None) -> str:
+        target = workflow_id or self.workflow_view_model().selected_workflow_id
+        if target is None:
+            raise RuntimeError("Select a workflow before starting it.")
+        definition = self._workflow_catalog.get(target)
+        if definition is None:
+            raise RuntimeError(f"Unknown workflow {target!r}.")
+        session = self._recorder.active_session()
+        owns_session = False
+        if session is None:
+            session_id = self.start_logging(
+                title=f"Workflow - {definition.title}",
+                notes=f"Guided workflow run for {definition.title}.",
+                tags=["workflow", definition.workflow_id],
+            )
+            session = self._store.sessions.get(session_id)
+            owns_session = True
+        if session is None:
+            raise RuntimeError("Workflow could not create or resolve a session.")
+        state = self._workflow_runner.start(definition.workflow_id, session.session_id)
+        self._workflow_owned_session_id = session.session_id if owns_session else None
+        self._workflow_status_message = f"Started {definition.title}."
+        self.add_marker(f"Started workflow: {definition.title}", label="workflow")
+        self.refresh_workflows()
+        return state.run.run_id
+
+    def complete_workflow_step(self, note: str | None = None) -> str:
+        current = self._workflow_runner.active_state()
+        if current is None or current.current_step is None:
+            raise RuntimeError("Start a workflow before completing steps.")
+        step = current.current_step
+        latest = self._device_manager.latest_reading()
+        state = self._workflow_runner.complete_current_step(latest_reading=latest, note=note)
+        detail = f"{current.definition.title}: {step.title}"
+        if step.capture and latest is not None:
+            detail = f"{detail} ({latest.display_text})"
+        self.add_marker(detail, label="workflow")
+        self._workflow_status_message = f"Completed step {step.title}."
+        self._finish_workflow_if_complete(state)
+        self.refresh_workflows()
+        return state.run.run_id
+
+    def skip_workflow_step(self, note: str | None = None) -> str:
+        current = self._workflow_runner.active_state()
+        if current is None or current.current_step is None:
+            raise RuntimeError("Start a workflow before skipping steps.")
+        step = current.current_step
+        state = self._workflow_runner.skip_current_step(note=note)
+        self.add_marker(f"Skipped workflow step: {step.title}", label="workflow")
+        self._workflow_status_message = f"Skipped step {step.title}."
+        self._finish_workflow_if_complete(state)
+        self.refresh_workflows()
+        return state.run.run_id
+
+    def cancel_workflow(self) -> str | None:
+        run = self._workflow_runner.cancel()
+        if run is None:
+            return None
+        self._workflow_status_message = f"Cancelled workflow {run.workflow_title or run.workflow_id}."
+        if self._recorder.active_session() is not None:
+            self.add_marker(f"Cancelled workflow: {run.workflow_title or run.workflow_id}", label="workflow")
+        if self._workflow_owned_session_id == run.session_id:
+            self.stop_logging()
+        self._workflow_owned_session_id = None
+        self.refresh_workflows()
+        return run.run_id
 
     def select_session(self, session_id: str) -> None:
         session = self._store.sessions.get(session_id)
@@ -391,6 +576,8 @@ class AppPresenter:
                 self._session,
                 reading_count_text=f"{self._recorder.reading_count()} readings",
             )
+            if self._workflow.is_running:
+                self._workflow = replace(self._workflow, latest_capture_text=f"Latest live reading: {reading.display_text}")
 
     def _resolve_export_session_id(self, session_id: str | None) -> str:
         target = session_id or self._last_completed_session_id
@@ -432,6 +619,14 @@ class AppPresenter:
     def _report_message(self, message: str) -> None:
         with self._lock:
             self._home = replace(self._home, message_text=message)
+
+    def _finish_workflow_if_complete(self, state: WorkflowRunState) -> None:
+        if state.run.result != WorkflowRunResult.COMPLETED:
+            return
+        self._workflow_status_message = f"Completed {state.definition.title}."
+        if self._workflow_owned_session_id == state.run.session_id:
+            self.stop_logging()
+        self._workflow_owned_session_id = None
 
 
 def _device_vm(device: DeviceInfo) -> ScannedDeviceViewModel:
@@ -526,3 +721,75 @@ def _marker_points(readings: list[Reading], markers: list[SessionMarker]) -> lis
             current_value = float(numeric[numeric_index].value)
         marker_values.append((max((marker.timestamp_utc - start).total_seconds(), 0.0), current_value))
     return marker_values
+
+
+def _workflow_definition_vm(definition: WorkflowDefinition) -> WorkflowDefinitionViewModel:
+    return WorkflowDefinitionViewModel(
+        workflow_id=definition.workflow_id,
+        title=definition.title,
+        category=definition.category,
+        description=definition.description,
+        step_count_text=f"{len(definition.steps)} steps",
+    )
+
+
+def _workflow_step_vm(result: WorkflowStepResult, definition: WorkflowDefinition) -> WorkflowStepViewModel:
+    step = next((item for item in definition.steps if item.step_id == result.step_id), None)
+    title = result.step_id if step is None else step.title
+    instruction = "" if step is None else step.instruction
+    if result.status == WorkflowStepResultStatus.CAPTURED:
+        status_text = "Captured"
+    elif result.status == WorkflowStepResultStatus.SKIPPED:
+        status_text = "Skipped"
+    else:
+        status_text = "Completed"
+    detail = _workflow_result_detail(result)
+    return WorkflowStepViewModel(
+        step_id=result.step_id,
+        title=title,
+        instruction=instruction,
+        status_text=status_text,
+        detail_text=detail,
+    )
+
+
+def _workflow_run_vm(run: WorkflowRun) -> WorkflowRunSummaryViewModel:
+    started = run.started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return WorkflowRunSummaryViewModel(
+        run_id=run.run_id,
+        workflow_id=run.workflow_id,
+        title=run.workflow_title or run.workflow_id,
+        session_id=run.session_id,
+        started_at_text=started,
+        result_text=run.result.value.replace("_", " ").title(),
+    )
+
+
+def _workflow_requirement_text(step: WorkflowStep) -> str:
+    if not step.capture:
+        return "Manual checklist step"
+    fragments = ["Capture the current live reading"]
+    if step.expected_measurement_type is not None:
+        fragments.append(f"type {step.expected_measurement_type.value}")
+    if step.expected_unit:
+        fragments.append(f"unit {step.expected_unit}")
+    return " | ".join(fragments)
+
+
+def _workflow_result_detail(result: WorkflowStepResult) -> str:
+    fragments = [result.completed_at.astimezone(timezone.utc).strftime("%H:%M:%S UTC")]
+    if result.reading is not None:
+        fragments.append(result.reading.display_text or result.reading.unit or "captured reading")
+    if result.note:
+        fragments.append(result.note)
+    return " | ".join(fragments)
+
+
+def _latest_capture_text(results: tuple[WorkflowStepResult, ...] | list[WorkflowStepResult]) -> str:
+    for result in reversed(list(results)):
+        if result.reading is not None:
+            return f"Last capture: {result.reading.display_text}"
+    if results:
+        last = list(results)[-1]
+        return f"Last step: {last.step_id} ({last.status.value})"
+    return "No captured step yet"

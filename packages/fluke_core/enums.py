@@ -11,6 +11,7 @@ class MeasurementType(str, Enum):
     CURRENT_AC_DC = "current_ac_dc"
     CURRENT_INRUSH = "current_inrush"
     RESISTANCE = "resistance"
+    CONTINUITY = "continuity"
     CAPACITANCE = "capacitance"
     FREQUENCY = "frequency"
     DUTY_CYCLE = "duty_cycle"
@@ -37,3 +38,15 @@ class ConnectionState(str, Enum):
     RECONNECTING = "reconnecting"
     DISCONNECTED = "disconnected"
     ERROR = "error"
+
+
+class WorkflowRunResult(str, Enum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    ABORTED = "aborted"
+
+
+class WorkflowStepResultStatus(str, Enum):
+    COMPLETED = "completed"
+    CAPTURED = "captured"
+    SKIPPED = "skipped"

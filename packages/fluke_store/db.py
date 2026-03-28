@@ -9,10 +9,13 @@ from fluke_core.models.device import DeviceInfo
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.models.workflow import WorkflowRun, WorkflowStepResult
 from fluke_store.repositories.devices import DeviceRepository
 from fluke_store.repositories.markers import MarkerRepository
 from fluke_store.repositories.readings import ReadingRepository
 from fluke_store.repositories.sessions import SessionRepository
+from fluke_store.repositories.workflow_runs import WorkflowRunRepository
+from fluke_store.repositories.workflow_step_results import WorkflowStepResultRepository
 from fluke_store.schema import SCHEMA_SQL
 
 
@@ -40,6 +43,8 @@ class FlukeStore:
         self.markers = MarkerRepository(self.con)
         self.sessions = SessionRepository(self.con)
         self.readings = ReadingRepository(self.con)
+        self.workflow_runs = WorkflowRunRepository(self.con)
+        self.workflow_step_results = WorkflowStepResultRepository(self.con)
 
     def close(self) -> None:
         self.con.close()
@@ -55,6 +60,12 @@ class FlukeStore:
 
     def add_marker(self, session_id: str, marker: SessionMarker) -> SessionMarker:
         return self.markers.append(session_id, marker)
+
+    def create_workflow_run(self, run: WorkflowRun) -> WorkflowRun:
+        return self.workflow_runs.create(run)
+
+    def add_workflow_step_result(self, result: WorkflowStepResult) -> WorkflowStepResult:
+        return self.workflow_step_results.append(result)
 
     def export_snapshot(
         self,
@@ -81,6 +92,18 @@ class FlukeStore:
 
         devices = [device for device_id in device_ids if (device := self.devices.get(device_id)) is not None]
         markers = []
+        workflow_runs = []
+        workflow_step_results = []
         for session in sessions:
             markers.extend(self.markers.list_for_session(session.session_id))
-        return {"devices": devices, "sessions": sessions, "readings": readings, "markers": markers}
+            workflow_runs.extend(self.workflow_runs.list_for_session(session.session_id))
+        for workflow_run in workflow_runs:
+            workflow_step_results.extend(self.workflow_step_results.list_for_run(workflow_run.run_id))
+        return {
+            "devices": devices,
+            "sessions": sessions,
+            "readings": readings,
+            "markers": markers,
+            "workflow_runs": workflow_runs,
+            "workflow_step_results": workflow_step_results,
+        }

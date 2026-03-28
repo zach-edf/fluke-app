@@ -1,0 +1,44 @@
+{
+  "workflow_id": "charger_output_check_v1",
+  "title": "Charger Output Check",
+  "description": "Validate charger setup and capture stable DC output readings.",
+  "category": "Charger",
+  "estimated_duration_min": 4,
+  "tags": [
+    "charger",
+    "voltage",
+    "power"
+  ],
+  "steps": [
+    {
+      "id": "inspect_charger_setup",
+      "title": "Inspect Charger Setup",
+      "instruction": "Confirm the charger is set to the expected output mode before taking measurements.",
+      "capture": false,
+      "note_prompt": "Record charger configuration details."
+    },
+    {
+      "id": "capture_output_voltage",
+      "title": "Capture Output Voltage",
+      "instruction": "Measure the charger output and capture the DC voltage reading.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "capture_stable_voltage",
+      "title": "Capture Stability Reading",
+      "instruction": "Wait for the output to settle, then capture a second DC voltage reading.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "record_output_assessment",
+      "title": "Record Assessment",
+      "instruction": "Note whether the charger output appears stable and appropriate for the target device.",
+      "capture": false,
+      "note_prompt": "Summarize the charger output."
+    }
+  ]
+}
