@@ -3,10 +3,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from fluke_app import DeviceManager, EventBus, ReadingStreamService
+from apps.cli.runtime import build_device_manager
 from fluke_core.models.reading import Reading
-from fluke_protocol import ProfileRegistry
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -19,17 +17,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle(args: argparse.Namespace) -> int:
-    try:
-        from fluke_ble.bleak_adapter import BleakAdapter
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("BLE support requires the `bleak` package. Install `requirements.txt`.") from exc
-
-    manager = DeviceManager(
-        ble_adapter=BleakAdapter(),
-        profile_registry=ProfileRegistry([Fluke376FCProfile()]),
-        event_bus=EventBus(),
-        reading_stream=ReadingStreamService(),
-    )
+    manager = build_device_manager()
 
     received = 0
     finished = asyncio.Event()

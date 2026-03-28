@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from fluke_app import DeviceManager, EventBus, ReadingStreamService
-from fluke_protocol import ProfileRegistry
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
+from apps.cli.runtime import build_device_manager
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -15,17 +13,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle(args: argparse.Namespace) -> int:
-    try:
-        from fluke_ble.bleak_adapter import BleakAdapter
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("BLE support requires the `bleak` package. Install `requirements.txt`.") from exc
-
-    manager = DeviceManager(
-        ble_adapter=BleakAdapter(),
-        profile_registry=ProfileRegistry([Fluke376FCProfile()]),
-        event_bus=EventBus(),
-        reading_stream=ReadingStreamService(),
-    )
+    manager = build_device_manager()
     devices = await manager.scan(timeout_s=args.timeout)
     if args.name:
         devices = [device for device in devices if args.name.lower() in (device.nickname or "").lower()]

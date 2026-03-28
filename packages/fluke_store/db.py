@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fluke_core.models.device import DeviceInfo
+from fluke_core.models.reading import Reading
+from fluke_core.models.session import Session
+from fluke_store.repositories.devices import DeviceRepository
+from fluke_store.repositories.readings import ReadingRepository
+from fluke_store.repositories.sessions import SessionRepository
+from fluke_store.schema import SCHEMA_SQL
+
+
+def connect(path: str | Path) -> sqlite3.Connection:
+    con = sqlite3.connect(str(path))
+    con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys = ON")
+    return con
+
+
+def initialize(con: sqlite3.Connection) -> None:
+    con.executescript(SCHEMA_SQL)
+    con.commit()
+
+
+class FlukeStore:
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self.con = connect(self.path)
+        initialize(self.con)
+        self.devices = DeviceRepository(self.con)
+        self.sessions = SessionRepository(self.con)
+        self.readings = ReadingRepository(self.con)
+
+    def close(self) -> None:
+        self.con.close()
+
+    def upsert_device(self, device: DeviceInfo, last_seen_at: datetime | None = None) -> DeviceInfo:
+        return self.devices.upsert(device, last_seen_at=last_seen_at)
+
+    def create_session(self, session: Session) -> Session:
+        return self.sessions.create(session)
+
+    def add_reading(self, session_id: str, reading: Reading) -> Reading:
+        return self.readings.append(session_id, reading)
+
+    def export_snapshot(
+        self,
+        session_ids: Iterable[str] | None = None,
+    ) -> dict[str, list]:
+        device_ids: list[str] = []
+        sessions: list[Session] = []
+        readings: list[Reading] = []
+
+        if session_ids is None:
+            sessions = self.sessions.list_recent(limit=500)
+        else:
+            for session_id in session_ids:
+                session = self.sessions.get(session_id)
+                if session is not None:
+                    sessions.append(session)
+
+        seen_devices: set[str] = set()
+        for session in sessions:
+            if session.device_id not in seen_devices:
+                seen_devices.add(session.device_id)
+                device_ids.append(session.device_id)
+            readings.extend(self.readings.list_for_session(session.session_id))
+
+        devices = [device for device_id in device_ids if (device := self.devices.get(device_id)) is not None]
+        return {"devices": devices, "sessions": sessions, "readings": readings}

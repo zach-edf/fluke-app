@@ -13,7 +13,9 @@ dependencies = [
 ]
 
 [project.scripts]
+fluke = "apps.cli.main:main"
 fluke-cli = "apps.cli.main:main"
+fluke-desktop = "apps.desktop.main:main"
 
 [tool.setuptools.packages.find]
 where = [".", "packages"]
