@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import threading
 
@@ -9,7 +9,9 @@ from apps.desktop.viewmodels import (
     DiscoveryViewModel,
     HomeViewModel,
     LiveReadingViewModel,
+    RecentDeviceViewModel,
     ScannedDeviceViewModel,
+    SettingsViewModel,
     SessionSummaryViewModel,
     SessionViewModel,
 )
@@ -21,10 +23,17 @@ from fluke_core.models.session import Session
 
 
 class AppPresenter:
-    def __init__(self, device_manager: object, store: object, app_version: str = "0.1.0") -> None:
+    def __init__(
+        self,
+        device_manager: object,
+        store: object,
+        app_version: str = "0.1.0",
+        export_directory: str | Path = "exports",
+    ) -> None:
         self._device_manager = device_manager
         self._store = store
         self._app_version = app_version
+        self._export_directory = Path(export_directory)
         self._recorder = SessionRecorder(store.sessions, store.readings)
         self._export_service = ExportService(
             store.sessions,
@@ -37,10 +46,16 @@ class AppPresenter:
         self._discovery = DiscoveryViewModel()
         self._live = LiveReadingViewModel()
         self._session = SessionViewModel(database_path_text=str(store.path))
+        self._settings = SettingsViewModel(
+            database_path_text=str(store.path),
+            export_directory_text=str(self._export_directory),
+            diagnostics_text="PySide6 and BLE runtime configured.",
+        )
         self._current_device: DeviceInfo | None = None
         self._last_completed_session_id: str | None = None
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
+        self.refresh_recent_devices()
         self.refresh_recent_sessions()
 
     def home_view_model(self) -> HomeViewModel:
@@ -58,6 +73,10 @@ class AppPresenter:
     def session_view_model(self) -> SessionViewModel:
         with self._lock:
             return replace(self._session)
+
+    def settings_view_model(self) -> SettingsViewModel:
+        with self._lock:
+            return replace(self._settings)
 
     async def scan_devices(self, timeout_s: float = 5.0) -> tuple[ScannedDeviceViewModel, ...]:
         self._set_discovery(status_text="Scanning...")
@@ -99,8 +118,21 @@ class AppPresenter:
                 selected_device_id=device.device_id,
                 status_text=f"Connected to {label}",
             )
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=f"Connected to {label}; BLE stream active.",
+            )
+        self.refresh_recent_devices()
         self.refresh_recent_sessions()
         return device
+
+    async def reconnect_last_device(self) -> DeviceInfo:
+        recent = self._store.devices.list_recent(limit=1)
+        if not recent:
+            raise RuntimeError("No recent device is stored yet.")
+        last = recent[0]
+        self.select_device(last.device_id)
+        return await self.connect_device(device_id=last.device_id, profile_id=last.profile_id or None)
 
     async def disconnect_device(self) -> None:
         if self._recorder.active_session() is not None:
@@ -121,6 +153,7 @@ class AppPresenter:
                 session_title=None,
             )
             self._discovery = replace(self._discovery, status_text="Disconnected")
+            self._settings = replace(self._settings, diagnostics_text="Disconnected.")
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -179,22 +212,36 @@ class AppPresenter:
 
     def export_session_csv(self, path: str | Path, session_id: str | None = None) -> str:
         target = self._resolve_export_session_id(session_id)
-        exported = self._export_service.export_csv(target, path)
+        export_path = self._resolve_export_path(path, "desktop_session.csv")
+        exported = self._export_service.export_csv(target, export_path)
         with self._lock:
             self._session = replace(self._session, export_status_text=f"CSV exported to {exported}")
         return exported
 
     def export_session_json(self, path: str | Path, session_id: str | None = None) -> str:
         target = self._resolve_export_session_id(session_id)
-        exported = self._export_service.export_json(target, path)
+        export_path = self._resolve_export_path(path, "desktop_session.json")
+        exported = self._export_service.export_json(target, export_path)
         with self._lock:
             self._session = replace(self._session, export_status_text=f"JSON exported to {exported}")
         return exported
+
+    def set_export_directory(self, path: str | Path) -> None:
+        export_dir = Path(path)
+        with self._lock:
+            self._export_directory = export_dir
+            self._settings = replace(self._settings, export_directory_text=str(export_dir))
 
     async def shutdown(self) -> None:
         if self._recorder.active_session() is not None:
             self.stop_logging()
         await self._device_manager.disconnect()
+
+    def refresh_recent_devices(self, limit: int = 8) -> None:
+        devices = self._store.devices.list_recent(limit=limit)
+        rows = tuple(_recent_device_vm(device) for device in devices)
+        with self._lock:
+            self._home = replace(self._home, recent_devices=rows)
 
     def refresh_recent_sessions(self, limit: int = 10) -> None:
         sessions = self._store.sessions.list_recent(limit=limit)
@@ -208,6 +255,7 @@ class AppPresenter:
             self._discovery = replace(self._discovery, status_text=f"Error: {message}")
             self._session = replace(self._session, export_status_text=message)
             self._live = replace(self._live, status_text="Error")
+            self._settings = replace(self._settings, diagnostics_text=message)
 
     def select_device(self, device_id: str | None) -> None:
         with self._lock:
@@ -243,6 +291,12 @@ class AppPresenter:
         if not target:
             raise RuntimeError("No session available to export.")
         return target
+
+    def _resolve_export_path(self, path: str | Path, default_name: str) -> Path:
+        candidate = Path(path)
+        if candidate.name != "." and str(candidate) not in {"", "."}:
+            return candidate
+        return self._export_directory / default_name
 
     def _set_connection_status(self, status: str) -> None:
         with self._lock:
@@ -294,4 +348,24 @@ def _session_vm(session: Session) -> SessionSummaryViewModel:
         title=session.title or session.session_id,
         started_at_text=started,
         ended_at_text=ended,
+    )
+
+
+def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
+    label = device.nickname or device.model_name or device.device_id
+    last_seen_raw = str(device.metadata.get("last_seen_at") or "-")
+    if last_seen_raw != "-":
+        try:
+            last_seen_text = datetime.fromisoformat(last_seen_raw).astimezone(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            )
+        except ValueError:
+            last_seen_text = last_seen_raw
+    else:
+        last_seen_text = "-"
+    return RecentDeviceViewModel(
+        device_id=device.device_id,
+        label=label,
+        support_text=device.support_level,
+        last_seen_text=last_seen_text,
     )

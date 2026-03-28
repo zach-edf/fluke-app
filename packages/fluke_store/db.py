@@ -15,6 +15,9 @@ from fluke_store.schema import SCHEMA_SQL
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
+    path = Path(path)
+    if path.parent != Path("."):
+        path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(path))
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")

@@ -43,6 +43,8 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
 
             await presenter.connect_device()
             self.assertIn("Connected", presenter.home_view_model().connection_text)
+            self.assertEqual(len(presenter.home_view_model().recent_devices), 1)
+            self.assertIn("desktop.db", presenter.settings_view_model().database_path_text)
 
             initial = ReplayScenario(
                 (
@@ -74,8 +76,13 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(Path(json_path).exists())
             self.assertIn(session_id, [row.session_id for row in presenter.session_view_model().recent_sessions])
 
+            presenter.set_export_directory(tmp / "exports")
+            self.assertIn("exports", presenter.settings_view_model().export_directory_text)
+
             await presenter.disconnect_device()
             self.assertEqual(presenter.live_view_model().connection_text, "Disconnected")
+            await presenter.reconnect_last_device()
+            self.assertIn("Connected", presenter.home_view_model().connection_text)
         finally:
             store.close()
 

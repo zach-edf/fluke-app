@@ -21,6 +21,14 @@ class SessionSummaryViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class RecentDeviceViewModel:
+    device_id: str
+    label: str
+    support_text: str
+    last_seen_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class LiveReadingViewModel:
     main_value: str = "--"
     unit_text: str = ""
@@ -40,6 +48,7 @@ class HomeViewModel:
     active_session_text: str = "No active session"
     active_device_text: str = "No device connected"
     message_text: str = ""
+    recent_devices: tuple[RecentDeviceViewModel, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,3 +66,10 @@ class SessionViewModel:
     export_status_text: str = ""
     database_path_text: str = ""
     recent_sessions: tuple[SessionSummaryViewModel, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsViewModel:
+    database_path_text: str = ""
+    export_directory_text: str = ""
+    diagnostics_text: str = ""

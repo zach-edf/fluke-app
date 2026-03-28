@@ -86,10 +86,12 @@ def create_main_window(runtime) -> "QWidget":
             self._discovery = _discovery_panel(runtime, qt)
             self._live = _live_panel(runtime, qt)
             self._session = _session_panel(runtime, qt)
+            self._settings = _settings_panel(runtime, qt)
             tabs.addTab(self._home.panel, "Home")
             tabs.addTab(self._discovery.panel, "Device Discovery")
             tabs.addTab(self._live.panel, "Live Reading")
             tabs.addTab(self._session.panel, "Session")
+            tabs.addTab(self._settings.panel, "Settings")
             outer.addWidget(tabs)
             self.setCentralWidget(root)
 
@@ -108,12 +110,14 @@ def create_main_window(runtime) -> "QWidget":
             _refresh_discovery(runtime, self._discovery)
             _refresh_live(runtime, self._live)
             _refresh_session(runtime, self._session)
+            _refresh_settings(runtime, self._settings)
 
     return MainWindow()
 
 
 def _home_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     QLabel = qt["QLabel"]
+    QListWidget = qt["QListWidget"]
     QPushButton = qt["QPushButton"]
     QWidget = qt["QWidget"]
     QVBoxLayout = qt["QVBoxLayout"]
@@ -126,10 +130,13 @@ def _home_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     device = QLabel()
     session = QLabel()
     message = QLabel()
+    recent_devices = QListWidget()
     scan_button = QPushButton("Find Meters")
+    reconnect_button = QPushButton("Reconnect Last Device")
     scan_button.clicked.connect(lambda: _submit(runtime, runtime.presenter.scan_devices(timeout_s=5.0)))
+    reconnect_button.clicked.connect(lambda: _submit(runtime, runtime.presenter.reconnect_last_device()))
 
-    for widget in (title, subtitle, connection, device, session, message, scan_button):
+    for widget in (title, subtitle, connection, device, session, message, recent_devices, scan_button, reconnect_button):
         layout.addWidget(widget)
 
     return _PanelRefs(
@@ -141,6 +148,8 @@ def _home_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
             "device": device,
             "session": session,
             "message": message,
+            "recent_devices": recent_devices,
+            "list_item_cls": qt["QListWidgetItem"],
         },
     )
 
@@ -303,6 +312,37 @@ def _session_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
     )
 
 
+def _settings_panel(runtime, qt: dict[str, object]) -> _PanelRefs:
+    QLabel = qt["QLabel"]
+    QLineEdit = qt["QLineEdit"]
+    QPushButton = qt["QPushButton"]
+    QWidget = qt["QWidget"]
+    QVBoxLayout = qt["QVBoxLayout"]
+
+    panel = QWidget()
+    layout = QVBoxLayout(panel)
+    database = QLabel()
+    diagnostics = QLabel()
+    export_dir_input = QLineEdit()
+    apply_button = QPushButton("Apply Export Directory")
+
+    apply_button.clicked.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.set_export_directory(export_dir_input.text()))
+    )
+
+    for widget in (database, diagnostics, export_dir_input, apply_button):
+        layout.addWidget(widget)
+
+    return _PanelRefs(
+        panel=panel,
+        refs={
+            "database": database,
+            "diagnostics": diagnostics,
+            "export_dir_input": export_dir_input,
+        },
+    )
+
+
 def _refresh_home(runtime, panel: _PanelRefs) -> None:
     home = runtime.presenter.home_view_model()
     panel.refs["title"].setText(home.title)
@@ -311,6 +351,16 @@ def _refresh_home(runtime, panel: _PanelRefs) -> None:
     panel.refs["device"].setText(f"Device: {home.active_device_text}")
     panel.refs["session"].setText(f"Session: {home.active_session_text}")
     panel.refs["message"].setText(home.message_text)
+    recent = panel.refs["recent_devices"]
+    item_cls = panel.refs["list_item_cls"]
+    current = [recent.item(index).data(0x0100) for index in range(recent.count())]
+    desired = [device.device_id for device in home.recent_devices]
+    if current != desired:
+        recent.clear()
+        for device in home.recent_devices:
+            item = item_cls(f"{device.label} | support={device.support_text} | last_seen={device.last_seen_text}")
+            item.setData(0x0100, device.device_id)
+            recent.addItem(item)
 
 
 def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
@@ -369,6 +419,15 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
             item = item_cls(label)
             item.setData(0x0100, entry.session_id)
             recent.addItem(item)
+
+
+def _refresh_settings(runtime, panel: _PanelRefs) -> None:
+    settings = runtime.presenter.settings_view_model()
+    panel.refs["database"].setText(f"Database: {settings.database_path_text}")
+    panel.refs["diagnostics"].setText(settings.diagnostics_text)
+    export_dir_input = panel.refs["export_dir_input"]
+    if export_dir_input.text() != settings.export_directory_text:
+        export_dir_input.setText(settings.export_directory_text)
 
 
 def _submit(runtime, coro) -> None:

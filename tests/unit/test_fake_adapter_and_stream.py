@@ -88,6 +88,30 @@ class FakeAdapterStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(readings[0].measurement_type, MeasurementType.VOLTAGE_DC)
         self.assertEqual(readings[0].status, ReadingStatus.OVER_RANGE)
 
+    async def test_device_manager_can_reconnect_last_device(self) -> None:
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-3",
+                    name="Fluke 376 FC",
+                    address="22:33:44:55:66:77",
+                    rssi=-52,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+
+        await manager.scan()
+        await manager.connect("meter-3")
+        await manager.disconnect()
+
+        self.assertEqual(manager.last_device_id(), "meter-3")
+
+        device = await manager.reconnect()
+        self.assertEqual(device.device_id, "meter-3")
+        self.assertTrue(adapter.is_connected("meter-3"))
+
 
 if __name__ == "__main__":
     unittest.main()
