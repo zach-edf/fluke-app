@@ -39,6 +39,7 @@ class AppPresenter:
         store: object,
         app_version: str = "0.1.0",
         export_directory: str | Path = "exports",
+        workflow_catalog: object | None = None,
     ) -> None:
         self._device_manager = device_manager
         self._store = store
@@ -62,7 +63,7 @@ class AppPresenter:
             export_directory_text=str(self._export_directory),
             diagnostics_text="PySide6 and BLE runtime configured.",
         )
-        self._workflow_catalog = load_workflow_catalog()
+        self._workflow_catalog = workflow_catalog or load_workflow_catalog()
         self._workflow_runner = WorkflowRunner(
             self._workflow_catalog,
             store.workflow_runs,

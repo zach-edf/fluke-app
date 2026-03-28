@@ -1,0 +1,15 @@
+{
+  "workflow_id": "example_voltage_walkthrough_v1",
+  "title": "Example Voltage Walkthrough",
+  "description": "Template workflow shipped with the disabled example plugin.",
+  "category": "Example",
+  "steps": [
+    {
+      "id": "capture_voltage",
+      "instruction": "Capture a voltage reading from the experimental meter.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    }
+  ]
+}

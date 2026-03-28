@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
+from fluke_plugins import build_profile_registry
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -15,7 +15,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 async def handle_supported(args: argparse.Namespace) -> int:
     del args
-    profiles = [Fluke376FCProfile()]
+    profiles = build_profile_registry().all()
     print("Supported device profiles:")
     for profile in profiles:
         capabilities = ", ".join(profile.capabilities())

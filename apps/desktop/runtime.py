@@ -7,8 +7,7 @@ import threading
 
 from apps.desktop.presenters import AppPresenter
 from fluke_app import DeviceManager, EventBus, ReadingStreamService
-from fluke_protocol import ProfileRegistry
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
+from fluke_plugins import build_profile_registry, build_workflow_catalog
 from fluke_store import FlukeStore
 
 
@@ -76,14 +75,16 @@ def build_runtime(
 ) -> DesktopRuntime:
     adapter = ble_adapter if ble_adapter is not None else _build_bleak_adapter()
     store = FlukeStore(store_path)
+    profile_registry = build_profile_registry()
+    workflow_catalog = build_workflow_catalog()
     manager = DeviceManager(
         ble_adapter=adapter,
-        profile_registry=ProfileRegistry([Fluke376FCProfile()]),
+        profile_registry=profile_registry,
         event_bus=EventBus(),
         reading_stream=ReadingStreamService(),
     )
     return DesktopRuntime(
-        presenter=AppPresenter(manager, store, app_version=app_version),
+        presenter=AppPresenter(manager, store, app_version=app_version, workflow_catalog=workflow_catalog),
         runner=AsyncRunner(),
         store=store,
     )

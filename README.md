@@ -1,309 +1,422 @@
-# Fluke 376 FC Python Telemetry Toolkit
+# Fluke Community Desktop
 
-Turn your Fluke 376 FC into a scriptable measurement workflow:
-- live terminal dashboard with an old-school instrument vibe,
-- structured event engine and annotations,
-- profile-based runs,
-- CSV + SQLite + Parquet sinks,
-- report exports (HTML/PDF/PNG),
-- mode/function auditing against 376 FC capabilities.
+Open desktop app, CLI, and Python SDK for working with BLE-enabled Fluke meters from a shared architecture.
 
-This project is built for practical field/lab use: battery cells, tool packs, quick diagnostics, and repeatable test sessions.
+The project started from a single reverse-engineered prototype in `fluke_ble.py`. The repo now contains a more structured codebase built around:
 
-## What This Gives You
+- canonical domain models,
+- profile-based protocol decoding,
+- shared application services,
+- SQLite session logging,
+- desktop and CLI surfaces on top of the same services,
+- guided workflow execution,
+- an extension boundary for future contributed profiles and workflow packs.
 
-- Fast BLE scanning and device inspection
-- High-frequency capture of Fluke live characteristics
-- Decoded values, modes, units, and inferred measurement functions
-- Event markers for:
-  - contact on/off
-  - over-voltage
-  - unstable readings
-  - manual operator annotations (hotkeys)
-- Session persistence and comparison in SQLite
-- Parquet exports for analytics pipelines
-- Publishable report artifacts from each run
+The current in-tree device focus is still the Fluke 376 FC.
 
-## Platform Notes
+## Project Status
 
-- macOS: supported (your current setup)
-- Windows: supported (same Python CLI; hotkeys use Windows keyboard APIs)
-- Linux: should work for core BLE flow where BLE stack is available
+What exists now:
 
-## Install
+- BLE scan/connect/stream path through shared services
+- normalized `Reading` model and 376 FC profile decoder
+- SQLite session, marker, workflow-run, and export support
+- desktop app with discovery, live view, charting, replay, markers, session export, and workflow runner
+- CLI for scan, stream, log, sessions, plugins, fixture capture, and debug bundle export
+- Python SDK on the same core stack
+- plugin loader for contributed profiles and workflow JSON packs
+- hardware-free test coverage using fake BLE adapters and replay frames
 
-Base install:
+What still needs repeated real-hardware validation:
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+- end-to-end BLE behavior on the rebuilt stack
+- reconnect stability over longer sessions
+- packaged installer behavior
+- additional model support beyond the 376 FC
+
+## Guiding Methodology
+
+This repo intentionally avoids “desktop-only” or “CLI-only” logic.
+
+The development order has been:
+
+1. normalize protocol payloads into canonical readings
+2. persist sessions and make exports reliable
+3. expose the same behavior through CLI, desktop, and SDK
+4. add charts, workflows, and contributor tooling only after the core path was solid
+
+That methodology matters. If you add a new capability, add it to the shared stack first unless there is a very strong reason not to.
+
+## Repository Map
+
+```text
+apps/
+  cli/                  Command-line entry points
+  desktop/              PySide6 desktop application
+packages/
+  fluke_app/            Shared orchestration services
+  fluke_ble/            BLE transport abstraction + Bleak adapter
+  fluke_core/           Domain models, enums, statistics, workflow models
+  fluke_plugins/        Plugin discovery and extension loading
+  fluke_protocol/       Device profile registry and protocol decoding
+  fluke_sdk/            Public Python SDK
+  fluke_store/          SQLite schema and repositories
+  fluke_testing/        Fake adapters, replay tools, fixture capture helpers
+plugins/
+  examples/             Disabled template plugin for contributors
+workflows/              Built-in workflow definitions
+scripts/
+  fixture_capture.py    Raw fixture capture helper
+  export_debug_bundle.py
+docs/
+  architecture.md
+  support-matrix.md
+  developer/
 ```
 
-Optional packs:
+## Requirements
 
-```bash
-pip install -r requirements-plot.txt
-pip install -r requirements-dashboard.txt
-pip install -r requirements-data.txt
+- Python 3.11+
+- BLE-capable host
+- virtual environment recommended
+- for desktop UI: `PySide6`
+- for BLE runtime: `bleak`
+
+## Virtual Environment Setup
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-full.txt
 ```
 
-Install everything:
+If you only want the shared CLI/SDK stack:
 
-```bash
-pip install -r requirements-full.txt
+```powershell
+python -m pip install -r requirements.txt
 ```
 
-## 60-Second Quickstart
+## Running The App
 
-1. Scan for your meter:
+### Desktop
 
-```bash
-python fluke_ble.py scan --timeout 15 --name "Zach's 376FC"
+```powershell
+.\.venv\Scripts\python.exe -m apps.desktop.main
 ```
 
-2. Inspect services:
+The desktop app currently includes:
 
-```bash
-python fluke_ble.py inspect --device "<DEVICE_ID>"
+- Home
+- Device Discovery
+- Live Reading
+- Session replay and exports
+- Guided Workflows
+- Settings
+
+### CLI
+
+Main entry point:
+
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main --help
 ```
 
-3. Record the two known live Fluke characteristics:
+Installed entry points from `pyproject.toml`:
 
-```bash
-python fluke_ble.py record \
-  --device "<DEVICE_ID>" \
-  --duration 120 \
-  --chars "b6982901-7562-11e2-b50d-00163e46f8fe,b698290f-7562-11e2-b50d-00163e46f8fe" \
-  --console changes \
-  --out logs/session.csv
+- `fluke`
+- `fluke-cli`
+- `fluke-desktop`
+
+### Python SDK
+
+Example:
+
+```python
+import asyncio
+
+from fluke_sdk import FlukeClient
+
+
+async def main() -> None:
+    client = FlukeClient()
+    devices = await client.scan(timeout_s=5.0)
+    if not devices:
+        print("No devices found.")
+        return
+
+    device = await client.connect(devices[0].device_id)
+    print(device)
+
+    async for reading in client.stream_readings():
+        print(reading.display_text)
+        break
+
+    await client.close()
+
+
+asyncio.run(main())
 ```
 
-4. Clean/export transition readings:
+## CLI Quickstart
 
-```bash
-python fluke_ble.py analyze --input logs/session.csv --out logs/session_clean.csv
+### 1. Scan
+
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main scan --timeout 10 --name Fluke
 ```
 
-## Command Map
+### 2. Stream normalized readings
 
-- `scan`: find nearby BLE devices
-- `inspect`: inspect GATT services/characteristics
-- `record`: run a full telemetry session (dashboard, plot, sinks, events, reports)
-- `analyze`: flatten raw capture into clean value transitions
-- `modes`: audit mode/unit/function coverage from capture data
-- `report`: generate report artifacts from existing captures
-- `profile`: list/show/run preset workflows from `profiles/*.toml`
-- `db`: inspect and compare sessions stored in SQLite
-
-## Signature Workflows
-
-### 1) Live Dashboard Session (cockpit mode)
-
-```bash
-python fluke_ble.py record \
-  --device "<DEVICE_ID>" \
-  --duration 180 \
-  --console none \
-  --dashboard \
-  --dashboard-refresh-hz 6 \
-  --chars "b6982901-7562-11e2-b50d-00163e46f8fe,b698290f-7562-11e2-b50d-00163e46f8fe" \
-  --out logs/dashboard_session.csv
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main stream `
+  --device "<DEVICE_ID>" `
+  --profile fluke_376fc
 ```
 
-Use this when you want a single-screen operations view with live value, mode badge, sparkline, min/max, connection state, and event feed.
+### 3. Log to SQLite and export
 
-### 2) Battery Cell / Pack Session with Sinks + Report
-
-```bash
-python fluke_ble.py record \
-  --device "<DEVICE_ID>" \
-  --duration 180 \
-  --dashboard \
-  --plot \
-  --plot-theme brand \
-  --plot-save-png reports/live_brand.png \
-  --sqlite logs/fluke_sessions.db \
-  --parquet logs/parquet/battery_run.parquet \
-  --report-dir reports \
-  --report-formats html,pdf \
-  --report-title "Battery Pack Validation Run" \
-  --out logs/battery_run.csv
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main log `
+  --device "<DEVICE_ID>" `
+  --profile fluke_376fc `
+  --database data\fluke.db `
+  --duration 30 `
+  --title "Bench run" `
+  --notes "Initial validation" `
+  --csv-output exports\session.csv `
+  --json-output exports\session.json
 ```
 
-This produces a full archive for later analysis/comparison.
+### 4. Inspect sessions
 
-### 3) Profile-Driven Runs (recommended for repeatability)
-
-Starter profiles included:
-- `profiles/dc_battery_test.toml`
-- `profiles/ac_line_check.toml`
-- `profiles/mode_sweep.toml`
-
-List profiles:
-
-```bash
-python fluke_ble.py profile --dir profiles list
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main sessions list --database data\fluke.db
+.\.venv\Scripts\python.exe -m apps.cli.main sessions export `
+  --database data\fluke.db `
+  --session "<SESSION_ID>" `
+  --format json `
+  --output exports\session.json
 ```
 
-Run a profile:
+### 5. Show supported profiles
 
-```bash
-python fluke_ble.py profile --dir profiles run \
-  --name dc_battery_test \
-  --device "<DEVICE_ID>"
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main devices supported
 ```
 
-Override profile defaults on the fly:
+### 6. Inspect plugins
 
-```bash
-python fluke_ble.py profile --dir profiles run \
-  --name dc_battery_test \
-  --device "<DEVICE_ID>" \
-  --duration 300 \
-  --plot-theme publication
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main plugins list
 ```
 
-### 4) Mode Coverage Validation (376 FC readiness)
+### 7. Capture raw fixtures
 
-Run sweep profile:
-
-```bash
-python fluke_ble.py profile --dir profiles run \
-  --name mode_sweep \
-  --device "<DEVICE_ID>"
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main fixtures capture `
+  --device "<DEVICE_ID>" `
+  --profile fluke_376fc `
+  --duration 10 `
+  --output fixtures\capture.json
 ```
 
-Audit coverage:
+### 8. Export a debug bundle
 
-```bash
-python fluke_ble.py modes --input logs/mode_sweep.csv
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main debug bundle `
+  --database data\fluke.db `
+  --output artifacts\debug-bundle.zip
 ```
 
-`modes` reports:
-- observed mode tokens and units,
-- inferred function families,
-- unknown-mode/unit findings,
-- expected 376 FC function coverage (manual-driven checklist).
+## Desktop Workflow
 
-## Event Engine and Annotations
+### Live Reading
 
-Rule controls:
-- `--contact-threshold`
-- `--over-voltage`
-- `--unstable-delta`
-- `--unstable-window`
-- `--unstable-min-points`
+The Live Reading tab supports:
 
-Event output:
-- default `*_events.csv` next to session CSV
-- mirrored to SQLite/Parquet sinks when enabled
-- shown in dashboard event feed
+- current reading display
+- unit and measurement type
+- live chart
+- min/max/avg/sample summary
+- session start/stop
+- manual session markers
+- live chart PNG export
 
-Annotation hotkeys:
-- defaults: `b`, `o`, `m`, `n`
-- custom map via `--annotation-map "b:Battery on,o:Battery off,..."`
-- disable via `--no-hotkeys`
-- interactive TTY only
+### Session
 
-## Data Sinks and Comparison
+The Session tab supports:
 
-Enable SQLite + Parquet during record:
+- recent sessions
+- replay chart
+- marker review
+- session notes
+- CSV/JSON export
+- chart PNG export
 
-```bash
-python fluke_ble.py record \
-  --device "<DEVICE_ID>" \
-  --sqlite logs/fluke_sessions.db \
-  --parquet logs/parquet/session.parquet \
-  --out logs/session.csv
+### Workflows
+
+The Workflows tab supports:
+
+- selecting a built-in workflow
+- starting a workflow run against the active session stack
+- completing or skipping steps
+- capture steps that validate the current live reading type/unit
+- recent workflow run history stored in SQLite
+
+Built-in workflow pack:
+
+- Battery Pack Check
+- Solar Panel Test
+- Charger Output Check
+- Continuity Checklist
+
+## Workflows
+
+Workflow definitions are data-driven JSON files under `workflows/`.
+
+Example shape:
+
+```json
+{
+  "workflow_id": "battery_pack_check_v1",
+  "title": "Battery Pack Check",
+  "steps": [
+    {
+      "id": "measure_total_voltage",
+      "instruction": "Measure total pack voltage.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    }
+  ]
+}
 ```
 
-Query sessions:
+The goal is to add useful repeatable procedures without rewriting presenter or UI logic every time.
 
-```bash
-python fluke_ble.py db sessions --sqlite logs/fluke_sessions.db --limit 20
+## Plugin Boundary
+
+The project now includes a lightweight plugin loader in `packages/fluke_plugins/`.
+
+Plugins can contribute:
+
+- new `DeviceProfile` implementations
+- additional workflow JSON directories
+- fixture directories
+
+Discovery root:
+
+```text
+plugins/
 ```
 
-Compare sessions:
+See:
 
-```bash
-python fluke_ble.py db compare \
-  --sqlite logs/fluke_sessions.db \
-  --session-a <SESSION_ID_A> \
-  --session-b <SESSION_ID_B>
+- [plugins/README.md](plugins/README.md)
+- [docs/developer/new-device-profile.md](docs/developer/new-device-profile.md)
+- `plugins/examples/example_profile_plugin/`
+
+Important note: the built-in `fluke_376fc` path still ships from the core codebase. Plugins are currently additive and intended for experimentation and contribution.
+
+## Diagnostics And Contributor Tooling
+
+### Raw fixture capture
+
+- CLI: `fluke fixtures capture`
+- script: `scripts/fixture_capture.py`
+
+### Debug bundle export
+
+- CLI: `fluke debug bundle`
+- script: `scripts/export_debug_bundle.py`
+
+These are meant to lower the barrier for remote debugging when hardware is unavailable.
+
+## Data Model Summary
+
+### Reading
+
+- timestamp
+- value
+- unit
+- measurement type
+- status
+- display text
+- source device
+
+### Session
+
+- title
+- notes
+- tags
+- device id
+- start/end time
+- profile id
+
+### Marker
+
+- session id
+- timestamp
+- label
+- note
+
+### Workflow Run
+
+- workflow id
+- session id
+- start/end time
+- run result
+
+## Testing
+
+Run everything:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+.\.venv\Scripts\python.exe -m compileall apps packages tests
 ```
 
-## Reporting
+The test strategy is intentionally layered:
 
-Generate report from an existing capture:
+- parser and statistics unit tests
+- fake-adapter integration tests
+- desktop presenter tests without hardware
+- workflow runner tests
+- plugin loader tests
+- fixture capture and debug bundle tests
 
-```bash
-python fluke_ble.py report \
-  --input logs/session.csv \
-  --events logs/session_events.csv \
-  --out-dir reports \
-  --theme publication \
-  --formats html,pdf
-```
+## Legacy Prototype
 
-Artifacts:
-- `<stem>_chart.png`
-- `<stem>_report.html`
-- `<stem>_report.pdf`
+`fluke_ble.py` is still in the repo because it contains the original reverse-engineered implementation and remains useful reference material. It is not the long-term architectural center of the project anymore.
 
-## Output Schema (Capture CSV)
+Prefer the shared stack unless you are specifically mining the legacy script for protocol details.
 
-Primary fields in session CSV:
-- `session_id`
-- `timestamp_utc`
-- `epoch_s`
-- `characteristic_uuid`
-- `source` (`read` or `notify`)
-- `decoded_primary`
-- `decoded_value`
-- `decoded_unit`
-- `decoded_mode`
-- `decoded_mode_label`
-- `decoded_mode_known`
-- `decoded_unit_norm`
-- `decoded_unit_known`
-- `decoded_function`
-- `decoded_status_tenths`
+## Documentation Index
 
-## Battery/Pack Test Ideas You Can Run Today
+- [docs/architecture.md](docs/architecture.md)
+- [docs/support-matrix.md](docs/support-matrix.md)
+- [docs/developer/new-device-profile.md](docs/developer/new-device-profile.md)
+- [docs/developer/fixtures-and-debug.md](docs/developer/fixtures-and-debug.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
-- Incoming QC: quick open-circuit + stability snapshot and auto report
-- Load-step sag: annotate load on/off and inspect droop/recovery in timeline
-- Intermittent fault hunt: flex connectors and monitor unstable-event density
-- Pack benchmark: run same profile across packs and compare in SQLite
-- Aging trend: repeat profile monthly, compare drift and event rates
-- Inrush behavior: confirm startup transients for motorized tool loads
+## Current Roadmap Direction
 
-## Troubleshooting
+Already implemented:
 
-- No BLE device found:
-  - meter must be in Fluke Connect/BLE mode
-  - keep Fluke Connect app disconnected while using this script
-  - increase `--timeout`
-- Bluetooth unavailable error:
-  - ensure terminal app has Bluetooth permission in OS settings
-- Dashboard or plot fails:
-  - install optional deps (`requirements-dashboard.txt`, `requirements-plot.txt`)
-- Parquet fails:
-  - install `requirements-data.txt`
-- Too many unknown modes/functions:
-  - run `mode_sweep` profile and audit with `modes`
-  - share output and extend mode/unit mappings
+- shared BLE + protocol + CLI slice
+- session logging and exports
+- desktop live/session UX
+- charts, markers, summaries, chart export
+- guided workflows
+- plugin boundary, fixture capture, debug bundle export
 
-## Safety
+Next likely work:
 
-This toolkit improves capture and analysis, but it does not replace safe measurement practice.
-Follow Fluke operating limits, category ratings, and PPE requirements for live electrical work.
-
-## Relevant Files
-
-- Main CLI: `fluke_ble.py`
-- Profiles: `profiles/*.toml`
-- Reports: `reports/`
-- Logs: `logs/`
-- Manual reference: `376FC Manual.pdf`
+- more real hardware validation
+- additional profile support
+- richer workflow/reporting features
+- packaging and installer work
+- contributor docs expansion

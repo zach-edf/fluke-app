@@ -8,14 +8,17 @@ from apps.cli._bootstrap import ensure_repo_paths
 
 ensure_repo_paths()
 
-from apps.cli.commands import devices, log, scan, sessions, stream
+from apps.cli.commands import debug, devices, fixtures, log, plugins, scan, sessions, stream
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Fluke Community CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    debug.register(subparsers)
     devices.register(subparsers)
+    fixtures.register(subparsers)
     log.register(subparsers)
+    plugins.register(subparsers)
     scan.register(subparsers)
     sessions.register(subparsers)
     stream.register(subparsers)

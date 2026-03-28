@@ -9,7 +9,14 @@ from fluke_core.models.workflow import WorkflowDefinition, WorkflowStep
 
 class WorkflowCatalog:
     def __init__(self, definitions: list[WorkflowDefinition]) -> None:
-        self._definitions = {definition.workflow_id: definition for definition in definitions}
+        seen: set[str] = set()
+        ordered: list[WorkflowDefinition] = []
+        for definition in definitions:
+            if definition.workflow_id in seen:
+                raise RuntimeError(f"Duplicate workflow id {definition.workflow_id!r}.")
+            seen.add(definition.workflow_id)
+            ordered.append(definition)
+        self._definitions = {definition.workflow_id: definition for definition in ordered}
 
     def list(self) -> list[WorkflowDefinition]:
         return sorted(self._definitions.values(), key=lambda definition: definition.title.lower())
@@ -22,9 +29,20 @@ def default_workflow_directory() -> Path:
     return Path(__file__).resolve().parents[2] / "workflows"
 
 
-def load_workflow_catalog(path: str | Path | None = None) -> WorkflowCatalog:
-    root = default_workflow_directory() if path is None else Path(path)
-    definitions = [_load_definition(file_path) for file_path in sorted(root.glob("*.json"))]
+def load_workflow_catalog(
+    path: str | Path | None = None,
+    *,
+    extra_paths: list[str | Path] | tuple[str | Path, ...] = (),
+) -> WorkflowCatalog:
+    roots: list[Path] = []
+    primary = default_workflow_directory() if path is None else Path(path)
+    roots.append(primary)
+    roots.extend(Path(extra) for extra in extra_paths)
+    definitions: list[WorkflowDefinition] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        definitions.extend(_load_definition(file_path) for file_path in sorted(root.glob("*.json")))
     return WorkflowCatalog(definitions)
 
 

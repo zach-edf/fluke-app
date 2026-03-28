@@ -7,7 +7,14 @@ from fluke_protocol.profiles.base import DeviceProfile
 
 class ProfileRegistry:
     def __init__(self, profiles: list[DeviceProfile]):
-        self._profiles = profiles
+        seen: set[str] = set()
+        ordered: list[DeviceProfile] = []
+        for profile in profiles:
+            if profile.profile_id in seen:
+                raise RuntimeError(f"Duplicate profile id {profile.profile_id!r}.")
+            seen.add(profile.profile_id)
+            ordered.append(profile)
+        self._profiles = ordered
 
     def resolve(self, advertisement_name: str | None, metadata: dict[str, Any]) -> DeviceProfile | None:
         for profile in self._profiles:
@@ -25,3 +32,6 @@ class ProfileRegistry:
         if len(self._profiles) == 1:
             return self._profiles[0]
         return None
+
+    def all(self) -> list[DeviceProfile]:
+        return list(self._profiles)

@@ -1,0 +1,15 @@
+{
+  "plugin_id": "example_profile_plugin",
+  "name": "Example Profile Plugin",
+  "version": "0.1.0",
+  "module": "profile.py",
+  "callable": "register_plugin",
+  "description": "Disabled template for contributing an experimental device profile and workflow pack.",
+  "enabled": false,
+  "workflow_paths": [
+    "workflows"
+  ],
+  "fixture_paths": [
+    "fixtures"
+  ]
+}

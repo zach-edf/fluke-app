@@ -11,8 +11,7 @@ ensure_repo_paths()
 from fluke_app.device_manager import DeviceManager
 from fluke_ble.adapter import BleAdapter
 from fluke_core import ConnectionState, DeviceInfo, Reading
-from fluke_protocol import ProfileRegistry
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
+from fluke_plugins import build_profile_registry
 
 
 _SENTINEL = object()
@@ -26,7 +25,7 @@ class FlukeClient:
         device_manager: DeviceManager | None = None,
     ) -> None:
         self._ble_adapter = ble_adapter or _build_ble_adapter()
-        self._profiles = profile_registry or ProfileRegistry([Fluke376FCProfile()])
+        self._profiles = profile_registry or build_profile_registry()
         self._manager = device_manager or DeviceManager(self._ble_adapter, self._profiles)
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._latest: Reading | None = None
