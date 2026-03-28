@@ -1,4 +1,5 @@
 -r requirements.txt
+-r requirements-desktop.txt
 -r requirements-plot.txt
 -r requirements-dashboard.txt
 -r requirements-data.txt

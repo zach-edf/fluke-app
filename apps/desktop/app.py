@@ -12,5 +12,7 @@ def run() -> int:
     runtime = build_runtime()
     window = create_main_window(runtime)
     window.show()
-    return app.exec()
-
+    try:
+        return app.exec()
+    finally:
+        runtime.close()
