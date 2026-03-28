@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import sqlite3
 from datetime import datetime
@@ -9,43 +10,46 @@ from fluke_core.models.reading import Reading
 
 
 class ReadingRepository:
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, lock=None):
         self._con = con
+        self._lock = lock or nullcontext()
 
     def append(self, session_id: str, reading: Reading) -> Reading:
-        self._con.execute(
-            """
-            INSERT INTO readings (
-                session_id, timestamp_utc, value, unit, measurement_type,
-                status, display_text, source_device_id, mode, metadata_json, raw_payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                session_id,
-                reading.timestamp_utc.isoformat(),
-                reading.value,
-                reading.unit,
-                reading.measurement_type.value,
-                reading.status.value,
-                reading.display_text,
-                reading.source_device_id,
-                reading.mode,
-                json.dumps(reading.metadata, sort_keys=True),
-                reading.raw_payload,
-            ),
-        )
-        self._con.commit()
+        with self._lock:
+            self._con.execute(
+                """
+                INSERT INTO readings (
+                    session_id, timestamp_utc, value, unit, measurement_type,
+                    status, display_text, source_device_id, mode, metadata_json, raw_payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    reading.timestamp_utc.isoformat(),
+                    reading.value,
+                    reading.unit,
+                    reading.measurement_type.value,
+                    reading.status.value,
+                    reading.display_text,
+                    reading.source_device_id,
+                    reading.mode,
+                    json.dumps(reading.metadata, sort_keys=True),
+                    reading.raw_payload,
+                ),
+            )
+            self._con.commit()
         return reading
 
     def list_for_session(self, session_id: str) -> list[Reading]:
-        rows = self._con.execute(
-            """
-            SELECT * FROM readings
-            WHERE session_id = ?
-            ORDER BY timestamp_utc ASC, id ASC
-            """,
-            (session_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT * FROM readings
+                WHERE session_id = ?
+                ORDER BY timestamp_utc ASC, id ASC
+                """,
+                (session_id,),
+            ).fetchall()
         return [_reading_from_row(row) for row in rows]
 
 

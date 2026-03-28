@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import unittest
 from pathlib import Path
 from uuid import uuid4
@@ -53,6 +54,28 @@ class StorePathTests(unittest.TestCase):
             self.assertIn("source_device_id", columns)
             self.assertIn("mode", columns)
             self.assertIn("metadata_json", columns)
+        finally:
+            store.close()
+
+    def test_store_allows_cross_thread_reads(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        db_path = tmp_root / uuid4().hex / "threaded" / "fluke.db"
+        store = FlukeStore(db_path)
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                store.sessions.list_recent(limit=1)
+                store.devices.list_recent(limit=1)
+            except Exception as exc:  # pragma: no cover - assertion below checks this stays empty
+                errors.append(exc)
+
+        try:
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(errors, [])
         finally:
             store.close()
 

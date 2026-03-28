@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import replace
 import sqlite3
 from datetime import datetime, timezone
@@ -8,57 +9,61 @@ from fluke_core.models.device import DeviceInfo
 
 
 class DeviceRepository:
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, lock=None):
         self._con = con
+        self._lock = lock or nullcontext()
 
     def upsert(self, device: DeviceInfo, last_seen_at: datetime | None = None) -> DeviceInfo:
         last_seen_at = last_seen_at or datetime.now(timezone.utc)
-        self._con.execute(
-            """
-            INSERT INTO devices (
-                id, ble_address, model_name, profile_id, nickname,
-                firmware_version, serial_number, support_level, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                ble_address=excluded.ble_address,
-                model_name=excluded.model_name,
-                profile_id=excluded.profile_id,
-                nickname=excluded.nickname,
-                firmware_version=excluded.firmware_version,
-                serial_number=excluded.serial_number,
-                support_level=excluded.support_level,
-                last_seen_at=excluded.last_seen_at
-            """,
-            (
-                device.device_id,
-                device.ble_address,
-                device.model_name,
-                device.profile_id,
-                device.nickname,
-                device.firmware_version,
-                device.serial_number,
-                device.support_level,
-                last_seen_at.isoformat(),
-            ),
-        )
-        self._con.commit()
+        with self._lock:
+            self._con.execute(
+                """
+                INSERT INTO devices (
+                    id, ble_address, model_name, profile_id, nickname,
+                    firmware_version, serial_number, support_level, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    ble_address=excluded.ble_address,
+                    model_name=excluded.model_name,
+                    profile_id=excluded.profile_id,
+                    nickname=excluded.nickname,
+                    firmware_version=excluded.firmware_version,
+                    serial_number=excluded.serial_number,
+                    support_level=excluded.support_level,
+                    last_seen_at=excluded.last_seen_at
+                """,
+                (
+                    device.device_id,
+                    device.ble_address,
+                    device.model_name,
+                    device.profile_id,
+                    device.nickname,
+                    device.firmware_version,
+                    device.serial_number,
+                    device.support_level,
+                    last_seen_at.isoformat(),
+                ),
+            )
+            self._con.commit()
         return replace_device(device, last_seen_at=last_seen_at)
 
     def get(self, device_id: str) -> DeviceInfo | None:
-        row = self._con.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
+        with self._lock:
+            row = self._con.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
         if row is None:
             return None
         return _device_from_row(row)
 
     def list_recent(self, limit: int = 20) -> list[DeviceInfo]:
-        rows = self._con.execute(
-            """
-            SELECT * FROM devices
-            ORDER BY COALESCE(last_seen_at, '') DESC, model_name ASC, id ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT * FROM devices
+                ORDER BY COALESCE(last_seen_at, '') DESC, model_name ASC, id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
         return [_device_from_row(row) for row in rows]
 
 

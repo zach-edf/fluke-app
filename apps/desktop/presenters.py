@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -39,12 +40,14 @@ class AppPresenter:
         store: object,
         app_version: str = "0.1.0",
         export_directory: str | Path = "exports",
+        device_operation_timeout_s: float = 10.0,
         workflow_catalog: object | None = None,
     ) -> None:
         self._device_manager = device_manager
         self._store = store
         self._app_version = app_version
         self._export_directory = Path(export_directory)
+        self._device_operation_timeout_s = device_operation_timeout_s
         self._recorder = SessionRecorder(store.sessions, store.readings, store.markers)
         self._export_service = ExportService(
             store.sessions,
@@ -125,42 +128,51 @@ class AppPresenter:
         if not target_device_id:
             raise RuntimeError("Select a device before connecting.")
 
-        self._set_connection_status("Connecting...")
-        device = await self._device_manager.connect(target_device_id, profile_id=profile_id)
-        self._store.upsert_device(device)
-        await self._device_manager.start_stream()
+        self._set_connecting_state(target_device_id)
+        try:
+            device = await asyncio.wait_for(
+                self._device_manager.connect(target_device_id, profile_id=profile_id),
+                timeout=self._device_operation_timeout_s,
+            )
+        except asyncio.TimeoutError as exc:
+            self._set_discovery(status_text=f"Connection timed out for {target_device_id}")
+            self._set_connection_status("Connection timed out")
+            raise RuntimeError(f"Timed out while connecting to {target_device_id}.") from exc
+
+        label = device.nickname or device.model_name or device.device_id
+        try:
+            self._store.upsert_device(device)
+            self._set_connected_pending_stream_state(device)
+            self.refresh_recent_devices()
+            await asyncio.wait_for(
+                self._device_manager.start_stream(),
+                timeout=self._device_operation_timeout_s,
+            )
+        except asyncio.TimeoutError as exc:
+            await self._device_manager.disconnect()
+            self._set_disconnected_state(
+                connection_text="Disconnected",
+                live_status_text="Disconnected",
+                discovery_status_text=f"Connected to {label}, but live stream startup timed out.",
+                diagnostics_text=f"Live stream startup timed out for {label}.",
+            )
+            raise RuntimeError(f"Connected to {label}, but live stream startup timed out.") from exc
+        except Exception as exc:
+            await self._device_manager.disconnect()
+            self._set_disconnected_state(
+                connection_text="Disconnected",
+                live_status_text="Disconnected",
+                discovery_status_text=f"Connection failed for {label}.",
+                diagnostics_text=f"Connection failed for {label}: {exc}",
+            )
+            raise RuntimeError(f"Connection failed for {label}: {exc}") from exc
 
         with self._lock:
-            self._current_device = device
-            label = device.nickname or device.model_name or device.device_id
-            self._chart_t0 = None
-            self._live_points.clear()
-            self._live_marker_points.clear()
-            self._live_readings = []
-            self._home = replace(
-                self._home,
-                connection_text=f"Connected to {label}",
-                active_device_text=f"{label} ({device.device_id})",
-            )
-            self._live = replace(
-                self._live,
-                connection_text=f"Connected to {label}",
-                status_text="Streaming",
-                chart_points=(),
-                marker_points=(),
-                summary_text="Min - | Max - | Avg -",
-                marker_count_text="0 markers",
-            )
-            self._discovery = replace(
-                self._discovery,
-                selected_device_id=device.device_id,
-                status_text=f"Connected to {label}",
-            )
-            self._settings = replace(
-                self._settings,
-                diagnostics_text=f"Connected to {label}; BLE stream active.",
-            )
-        self.refresh_recent_devices()
+            self._live = replace(self._live, status_text="Streaming")
+            self._discovery = replace(self._discovery, status_text=f"Connected to {label}")
+            self._settings = replace(self._settings, diagnostics_text=f"Connected to {label}; BLE stream active.")
+            self._home = replace(self._home, message_text=f"Connected to {label}.")
+
         self.refresh_recent_sessions()
         return device
 
@@ -180,30 +192,12 @@ class AppPresenter:
         if self._recorder.active_session() is not None:
             self.stop_logging()
         await self._device_manager.disconnect()
-        with self._lock:
-            self._current_device = None
-            self._chart_t0 = None
-            self._live_points.clear()
-            self._live_marker_points.clear()
-            self._live_readings = []
-            self._home = replace(
-                self._home,
-                connection_text="Disconnected",
-                active_device_text="No device connected",
-            )
-            self._live = replace(
-                self._live,
-                connection_text="Disconnected",
-                status_text="Disconnected",
-                is_logging=False,
-                session_title=None,
-                chart_points=(),
-                marker_points=(),
-                summary_text="Min - | Max - | Avg -",
-                marker_count_text="0 markers",
-            )
-            self._discovery = replace(self._discovery, status_text="Disconnected")
-            self._settings = replace(self._settings, diagnostics_text="Disconnected.")
+        self._set_disconnected_state(
+            connection_text="Disconnected",
+            live_status_text="Disconnected",
+            discovery_status_text="Disconnected",
+            diagnostics_text="Disconnected.",
+        )
         self.refresh_workflows()
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
@@ -599,6 +593,80 @@ class AppPresenter:
         with self._lock:
             self._home = replace(self._home, connection_text=status)
             self._live = replace(self._live, connection_text=status)
+
+    def _set_connecting_state(self, target_label: str) -> None:
+        status = f"Connecting to {target_label}..."
+        with self._lock:
+            self._home = replace(self._home, connection_text=status, message_text="")
+            self._live = replace(self._live, connection_text=status, status_text="Connecting")
+            self._discovery = replace(self._discovery, status_text=status)
+            self._settings = replace(self._settings, diagnostics_text=status)
+
+    def _set_connected_pending_stream_state(self, device: DeviceInfo) -> None:
+        label = device.nickname or device.model_name or device.device_id
+        with self._lock:
+            self._current_device = device
+            self._chart_t0 = None
+            self._live_points.clear()
+            self._live_marker_points.clear()
+            self._live_readings = []
+            self._home = replace(
+                self._home,
+                connection_text=f"Connected to {label}",
+                active_device_text=f"{label} ({device.device_id})",
+                message_text=f"Connected to {label}. Starting live stream...",
+            )
+            self._live = replace(
+                self._live,
+                connection_text=f"Connected to {label}",
+                status_text="Starting stream...",
+                chart_points=(),
+                marker_points=(),
+                summary_text="Min - | Max - | Avg -",
+                marker_count_text="0 markers",
+            )
+            self._discovery = replace(
+                self._discovery,
+                selected_device_id=device.device_id,
+                status_text=f"Connected to {label}. Starting live stream...",
+            )
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=f"Connected to {label}. Starting BLE notifications...",
+            )
+
+    def _set_disconnected_state(
+        self,
+        *,
+        connection_text: str,
+        live_status_text: str,
+        discovery_status_text: str,
+        diagnostics_text: str,
+    ) -> None:
+        with self._lock:
+            self._current_device = None
+            self._chart_t0 = None
+            self._live_points.clear()
+            self._live_marker_points.clear()
+            self._live_readings = []
+            self._home = replace(
+                self._home,
+                connection_text=connection_text,
+                active_device_text="No device connected",
+            )
+            self._live = replace(
+                self._live,
+                connection_text=connection_text,
+                status_text=live_status_text,
+                is_logging=False,
+                session_title=None,
+                chart_points=(),
+                marker_points=(),
+                summary_text="Min - | Max - | Avg -",
+                marker_count_text="0 markers",
+            )
+            self._discovery = replace(self._discovery, status_text=discovery_status_text)
+            self._settings = replace(self._settings, diagnostics_text=diagnostics_text)
 
     def _set_discovery(
         self,

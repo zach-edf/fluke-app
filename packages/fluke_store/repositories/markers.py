@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import sqlite3
 from datetime import datetime
 
@@ -7,24 +8,26 @@ from fluke_core.models.marker import SessionMarker
 
 
 class MarkerRepository:
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, lock=None):
         self._con = con
+        self._lock = lock or nullcontext()
 
     def append(self, session_id: str, marker: SessionMarker) -> SessionMarker:
-        cursor = self._con.execute(
-            """
-            INSERT INTO session_markers (session_id, timestamp_utc, label, note, source)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                session_id,
-                marker.timestamp_utc.isoformat(),
-                marker.label,
-                marker.note,
-                marker.source,
-            ),
-        )
-        self._con.commit()
+        with self._lock:
+            cursor = self._con.execute(
+                """
+                INSERT INTO session_markers (session_id, timestamp_utc, label, note, source)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    marker.timestamp_utc.isoformat(),
+                    marker.label,
+                    marker.note,
+                    marker.source,
+                ),
+            )
+            self._con.commit()
         return SessionMarker(
             session_id=session_id,
             timestamp_utc=marker.timestamp_utc,
@@ -35,14 +38,15 @@ class MarkerRepository:
         )
 
     def list_for_session(self, session_id: str) -> list[SessionMarker]:
-        rows = self._con.execute(
-            """
-            SELECT * FROM session_markers
-            WHERE session_id = ?
-            ORDER BY timestamp_utc ASC, id ASC
-            """,
-            (session_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT * FROM session_markers
+                WHERE session_id = ?
+                ORDER BY timestamp_utc ASC, id ASC
+                """,
+                (session_id,),
+            ).fetchall()
         return [_marker_from_row(row) for row in rows]
 
 

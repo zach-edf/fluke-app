@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.marker import SessionMarker
@@ -23,7 +24,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     path = Path(path)
     if path.parent != Path("."):
         path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(path))
+    con = sqlite3.connect(str(path), check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     return con
@@ -52,12 +53,13 @@ class FlukeStore:
         self.path = Path(path)
         self.con = connect(self.path)
         initialize(self.con)
-        self.devices = DeviceRepository(self.con)
-        self.markers = MarkerRepository(self.con)
-        self.sessions = SessionRepository(self.con)
-        self.readings = ReadingRepository(self.con)
-        self.workflow_runs = WorkflowRunRepository(self.con)
-        self.workflow_step_results = WorkflowStepResultRepository(self.con)
+        self._lock = threading.RLock()
+        self.devices = DeviceRepository(self.con, lock=self._lock)
+        self.markers = MarkerRepository(self.con, lock=self._lock)
+        self.sessions = SessionRepository(self.con, lock=self._lock)
+        self.readings = ReadingRepository(self.con, lock=self._lock)
+        self.workflow_runs = WorkflowRunRepository(self.con, lock=self._lock)
+        self.workflow_step_results = WorkflowStepResultRepository(self.con, lock=self._lock)
 
     def close(self) -> None:
         self.con.close()

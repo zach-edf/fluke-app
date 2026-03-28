@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import sqlite3
 from datetime import datetime
@@ -10,28 +11,30 @@ from fluke_core.models.workflow import WorkflowStepResult
 
 
 class WorkflowStepResultRepository:
-    def __init__(self, con: sqlite3.Connection):
+    def __init__(self, con: sqlite3.Connection, lock=None):
         self._con = con
+        self._lock = lock or nullcontext()
 
     def append(self, result: WorkflowStepResult) -> WorkflowStepResult:
         payload = None if result.reading is None else json.dumps(result.reading.as_dict())
-        cursor = self._con.execute(
-            """
-            INSERT INTO workflow_step_results (
-                run_id, step_id, step_index, completed_at, status, note, reading_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                result.run_id,
-                result.step_id,
-                result.step_index,
-                result.completed_at.isoformat(),
-                result.status.value,
-                result.note,
-                payload,
-            ),
-        )
-        self._con.commit()
+        with self._lock:
+            cursor = self._con.execute(
+                """
+                INSERT INTO workflow_step_results (
+                    run_id, step_id, step_index, completed_at, status, note, reading_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.run_id,
+                    result.step_id,
+                    result.step_index,
+                    result.completed_at.isoformat(),
+                    result.status.value,
+                    result.note,
+                    payload,
+                ),
+            )
+            self._con.commit()
         return WorkflowStepResult(
             run_id=result.run_id,
             step_id=result.step_id,
@@ -44,14 +47,15 @@ class WorkflowStepResultRepository:
         )
 
     def list_for_run(self, run_id: str) -> list[WorkflowStepResult]:
-        rows = self._con.execute(
-            """
-            SELECT * FROM workflow_step_results
-            WHERE run_id = ?
-            ORDER BY step_index ASC, completed_at ASC, id ASC
-            """,
-            (run_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT * FROM workflow_step_results
+                WHERE run_id = ?
+                ORDER BY step_index ASC, completed_at ASC, id ASC
+                """,
+                (run_id,),
+            ).fetchall()
         return [_result_from_row(row) for row in rows]
 
 

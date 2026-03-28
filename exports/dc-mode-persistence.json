@@ -1,0 +1,298 @@
+{
+  "session": {
+    "session_id": "20260328T232810Z-3fd601e8",
+    "device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+    "started_at": "2026-03-28T23:28:10.482760+00:00",
+    "ended_at": "2026-03-28T23:28:13.660090+00:00",
+    "title": "DC mode persistence check",
+    "notes": "Post-fix validation",
+    "tags": [],
+    "app_version": "0.1.0",
+    "profile_id": "fluke_376fc"
+  },
+  "statistics": {
+    "reading_count": 13,
+    "numeric_count": 13,
+    "min_value": 9.2,
+    "max_value": 9.2,
+    "avg_value": 9.2,
+    "duration_s": 3.013814
+  },
+  "device": {
+    "device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+    "ble_address": "8477521A-DD95-59DD-04AD-76BC196226F6",
+    "model_name": "Fluke 376 FC",
+    "profile_id": "fluke_376fc",
+    "nickname": null,
+    "firmware_version": null,
+    "serial_number": null,
+    "support_level": "supported",
+    "rssi": null,
+    "metadata": {
+      "last_seen_at": "2026-03-28T23:28:10.479742+00:00"
+    }
+  },
+  "readings": [
+    {
+      "timestamp_utc": "2026-03-28T23:28:10.570800+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:10.840833+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:11.065523+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:11.379676+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:11.559919+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:11.831107+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:12.100824+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:12.326361+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:12.594610+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:12.820121+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:13.090015+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:13.314942+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    },
+    {
+      "timestamp_utc": "2026-03-28T23:28:13.584614+00:00",
+      "value": 9.2,
+      "unit": "V",
+      "measurement_type": "voltage_dc",
+      "status": "ok",
+      "display_text": "9.2 V",
+      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "mode": "dc",
+      "raw_payload_hex": "00202020392e3220560020206463202020",
+      "metadata": {
+        "function_key": "dc_voltage",
+        "function_label": "DC Voltage",
+        "known_mode": "true",
+        "known_unit": "true",
+        "mode_label": "DC",
+        "mode_raw": "dc",
+        "unit_family": "voltage"
+      }
+    }
+  ],
+  "markers": []
+}
