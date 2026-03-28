@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fluke-community"
+version = "0.1.0"
+description = "Shared core, BLE transport, and CLI foundation for Fluke BLE meters."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "bleak>=0.22.3",
+]
+
+[project.scripts]
+fluke-cli = "apps.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = [".", "packages"]
+include = ["apps*", "fluke_*"]
