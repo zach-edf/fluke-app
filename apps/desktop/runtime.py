@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 from typing import Any
 
+from apps.cli.runtime import default_database_path
 from apps.desktop.presenters import AppPresenter
 from fluke_app import DeviceManager, EventBus, ReadingStreamService
 from fluke_plugins import build_profile_registry, build_workflow_catalog
@@ -100,12 +101,12 @@ class LoopRunner:
 def build_runtime(
     *,
     ble_adapter: object | None = None,
-    store_path: str | Path = "data/fluke.db",
+    store_path: str | Path | None = None,
     app_version: str = "0.1.0",
     event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> DesktopRuntime:
     adapter = ble_adapter if ble_adapter is not None else _build_bleak_adapter()
-    store = FlukeStore(store_path)
+    store = FlukeStore(store_path or default_database_path())
     profile_registry = build_profile_registry()
     workflow_catalog = build_workflow_catalog()
     manager = DeviceManager(

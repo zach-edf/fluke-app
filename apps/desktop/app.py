@@ -3,18 +3,18 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from PySide6.QtAsyncio import QAsyncioEventLoopPolicy
-
+from apps.desktop._qt import QApplication
 from apps.desktop.runtime import build_runtime
-from apps.desktop.views import _require_qt, create_main_window
+from apps.desktop.theme import STYLESHEET
+from apps.desktop.views import create_main_window
 
 
 def run() -> int:
-    qt = _require_qt()
-    QApplication = qt["QApplication"]
-
     app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(STYLESHEET)
     if sys.platform == "darwin":
+        from PySide6.QtAsyncio import QAsyncioEventLoopPolicy
+
         previous_policy = asyncio.get_event_loop_policy()
         asyncio.set_event_loop_policy(QAsyncioEventLoopPolicy(quit_qapp=False))
         loop = asyncio.get_event_loop()

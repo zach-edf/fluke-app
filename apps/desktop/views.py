@@ -144,6 +144,7 @@ def create_main_window(runtime) -> QWidget:
             title.setObjectName("section_header")
             title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             subtitle = QLabel("Connect, view, and log readings from supported meters.")
+            subtitle.setWordWrap(True)
             header.addWidget(title, 2)
             header.addWidget(subtitle, 3)
             outer.addLayout(header)
@@ -176,10 +177,15 @@ def create_main_window(runtime) -> QWidget:
                 lambda: self._live.refs.get("marker_input") and self._live.refs["marker_input"].setFocus()
             )
             QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(
-                lambda: _safe_call(runtime, lambda: runtime.presenter.export_session_csv(
-                    _session_export_path(runtime, "csv"),
-                    session_id=_selected_session_id(runtime),
-                ))
+                lambda: _export_and_notify(
+                    self,
+                    runtime,
+                    lambda: runtime.presenter.export_session_csv(
+                        _session_export_path(runtime, "csv"),
+                        session_id=_selected_session_id(runtime),
+                    ),
+                    "CSV",
+                )
             )
 
             self._refresh_timer = QTimer(self)
@@ -395,7 +401,9 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     count = QLabel()
     summary = QLabel()
     database = QLabel()
+    database.setWordWrap(True)
     export_status = QLabel()
+    export_status.setWordWrap(True)
 
     recent = _make_table(["Title", "Started", "Ended"], min_height=150)
     markers_table = _make_table(["Time", "Label", "Note"], min_height=100)
@@ -490,6 +498,7 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
     panel = QWidget()
     layout = QVBoxLayout(panel)
     database = QLabel()
+    database.setWordWrap(True)
     diagnostics = QLabel()
     diagnostics.setWordWrap(True)
     export_dir_input = QLineEdit()
@@ -818,7 +827,7 @@ def _toggle_logging(runtime, live_panel: _PanelRefs) -> None:
 
 
 def _confirm_and_disconnect(window: QWidget, runtime) -> None:
-    if _confirm(window, "Disconnect", "Disconnect from device? Any active logging session will be stopped."):
+    if _confirm(window, "Disconnect", "Disconnect from device? Any active logging will stop."):
         _submit(runtime, runtime.presenter.disconnect_device())
 
 
@@ -838,8 +847,8 @@ def _export_chart_with_dialog(window: QWidget, runtime, chart, path: Path) -> No
 
 def _export_and_notify(window: QWidget, runtime, func, format_label: str) -> None:
     try:
-        func()
-        _info(window, "Export Complete", f"{format_label} export saved successfully.")
+        exported = func()
+        _info(window, "Export Complete", f"{format_label} export saved to:\n{exported}")
     except Exception as exc:
         runtime.presenter.report_error(str(exc))
 

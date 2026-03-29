@@ -10,7 +10,7 @@ from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("sessions", help="List and export recorded sessions")
-    parser.add_argument("--database", default=None, help="SQLite database path (default: platform data dir)")
+    parser.add_argument("--database", default=default_database_path(), help="SQLite database path (default: platform data dir)")
     session_subparsers = parser.add_subparsers(dest="sessions_command", required=True)
 
     list_parser = session_subparsers.add_parser("list", help="List recent sessions")
@@ -25,7 +25,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle_list(args: argparse.Namespace) -> int:
-    store = open_store(args.database or default_database_path())
+    store = open_store(args.database)
     try:
         sessions = store.sessions.list_recent(limit=args.limit)
     finally:
@@ -47,7 +47,7 @@ async def handle_list(args: argparse.Namespace) -> int:
 
 
 async def handle_export(args: argparse.Namespace) -> int:
-    store = open_store(args.database or default_database_path())
+    store = open_store(args.database)
     try:
         service = ExportService(
             store.sessions,

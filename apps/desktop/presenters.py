@@ -32,6 +32,8 @@ from fluke_core.models.session import Session
 from fluke_core.models.workflow import WorkflowDefinition, WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
 from fluke_core.services.statistics import summarize_readings
 
+_UNCHANGED = object()
+
 
 class AppPresenter:
     def __init__(
@@ -112,93 +114,113 @@ class AppPresenter:
             return replace(self._workflow)
 
     async def scan_devices(self, timeout_s: float = 5.0) -> tuple[ScannedDeviceViewModel, ...]:
+        self._set_home_busy(True)
+        self._set_discovery_busy(is_scanning=True)
         self._set_discovery(status_text="Scanning...")
-        devices = await self._device_manager.scan(timeout_s=timeout_s)
-        scanned = tuple(_device_vm(device) for device in devices)
-        self._set_discovery(
-            status_text=f"Found {len(scanned)} device(s)" if scanned else "No devices found",
-            devices=scanned,
-            selected_device_id=scanned[0].device_id if scanned else None,
-        )
-        self._report_message(f"Scan complete: {len(scanned)} device(s).")
-        return scanned
+        try:
+            devices = await self._device_manager.scan(timeout_s=timeout_s)
+            scanned = tuple(_device_vm(device) for device in devices)
+            self._set_discovery(
+                status_text=f"Found {len(scanned)} device(s)" if scanned else "No devices found",
+                devices=scanned,
+                selected_device_id=scanned[0].device_id if scanned else None,
+            )
+            self._report_message(f"Scan complete: {len(scanned)} device(s).")
+            return scanned
+        finally:
+            self._set_discovery_busy(is_scanning=False)
+            self._set_home_busy(False)
 
     async def connect_device(self, device_id: str | None = None, profile_id: str | None = None) -> DeviceInfo:
         target_device_id = device_id or self._discovery.selected_device_id
         if not target_device_id:
             raise RuntimeError("Select a device before connecting.")
 
-        self._set_connecting_state(target_device_id)
+        self._set_home_busy(True)
+        self._set_discovery_busy(is_connecting=True)
         try:
-            device = await asyncio.wait_for(
-                self._device_manager.connect(target_device_id, profile_id=profile_id),
-                timeout=self._device_operation_timeout_s,
-            )
-        except asyncio.TimeoutError as exc:
-            self._set_discovery(status_text=f"Connection timed out for {target_device_id}")
-            self._set_connection_status("Connection timed out")
-            raise RuntimeError(f"Timed out while connecting to {target_device_id}.") from exc
+            self._set_connecting_state(target_device_id)
+            try:
+                device = await asyncio.wait_for(
+                    self._device_manager.connect(target_device_id, profile_id=profile_id),
+                    timeout=self._device_operation_timeout_s,
+                )
+            except asyncio.TimeoutError as exc:
+                self._set_discovery(status_text=f"Connection timed out for {target_device_id}")
+                self._set_connection_status("Connection timed out")
+                raise RuntimeError(f"Timed out while connecting to {target_device_id}.") from exc
 
-        label = device.nickname or device.model_name or device.device_id
-        try:
-            self._store.upsert_device(device)
-            self._set_connected_pending_stream_state(device)
-            self.refresh_recent_devices()
-            await asyncio.wait_for(
-                self._device_manager.start_stream(),
-                timeout=self._device_operation_timeout_s,
-            )
-        except asyncio.TimeoutError as exc:
-            await self._device_manager.disconnect()
-            self._set_disconnected_state(
-                connection_text="Disconnected",
-                live_status_text="Disconnected",
-                discovery_status_text=f"Connected to {label}, but live stream startup timed out.",
-                diagnostics_text=f"Live stream startup timed out for {label}.",
-            )
-            raise RuntimeError(f"Connected to {label}, but live stream startup timed out.") from exc
-        except Exception as exc:
-            await self._device_manager.disconnect()
-            self._set_disconnected_state(
-                connection_text="Disconnected",
-                live_status_text="Disconnected",
-                discovery_status_text=f"Connection failed for {label}.",
-                diagnostics_text=f"Connection failed for {label}: {exc}",
-            )
-            raise RuntimeError(f"Connection failed for {label}: {exc}") from exc
+            label = device.nickname or device.model_name or device.device_id
+            try:
+                self._store.upsert_device(device)
+                self._set_connected_pending_stream_state(device)
+                self.refresh_recent_devices()
+                await asyncio.wait_for(
+                    self._device_manager.start_stream(),
+                    timeout=self._device_operation_timeout_s,
+                )
+            except asyncio.TimeoutError as exc:
+                await self._device_manager.disconnect()
+                self._set_disconnected_state(
+                    connection_text="Disconnected",
+                    live_status_text="Disconnected",
+                    discovery_status_text=f"Connected to {label}, but live stream startup timed out.",
+                    diagnostics_text=f"Live stream startup timed out for {label}.",
+                )
+                raise RuntimeError(f"Connected to {label}, but live stream startup timed out.") from exc
+            except Exception as exc:
+                await self._device_manager.disconnect()
+                self._set_disconnected_state(
+                    connection_text="Disconnected",
+                    live_status_text="Disconnected",
+                    discovery_status_text=f"Connection failed for {label}.",
+                    diagnostics_text=f"Connection failed for {label}: {exc}",
+                )
+                raise RuntimeError(f"Connection failed for {label}: {exc}") from exc
 
-        with self._lock:
-            self._live = replace(self._live, status_text="Streaming")
-            self._discovery = replace(self._discovery, status_text=f"Connected to {label}")
-            self._settings = replace(self._settings, diagnostics_text=f"Connected to {label}; BLE stream active.")
-            self._home = replace(self._home, message_text=f"Connected to {label}.")
+            with self._lock:
+                self._live = replace(self._live, status_text="Streaming")
+                self._discovery = replace(self._discovery, status_text=f"Connected to {label}")
+                self._settings = replace(self._settings, diagnostics_text=f"Connected to {label}; BLE stream active.")
+                self._home = replace(self._home, message_text=f"Connected to {label}.")
 
-        self.refresh_recent_sessions()
-        return device
+            self.refresh_recent_sessions()
+            return device
+        finally:
+            self._set_discovery_busy(is_connecting=False)
+            self._set_home_busy(False)
 
     async def reconnect_last_device(self) -> DeviceInfo:
-        recent = self._store.devices.list_recent(limit=1)
-        if not recent:
-            raise RuntimeError("No recent device is stored yet.")
-        last = recent[0]
-        self.select_device(last.device_id)
-        return await self.connect_device(device_id=last.device_id, profile_id=last.profile_id or None)
+        self._set_home_busy(True)
+        try:
+            recent = self._store.devices.list_recent(limit=1)
+            if not recent:
+                raise RuntimeError("No recent device is stored yet.")
+            last = recent[0]
+            self.select_device(last.device_id)
+            return await self.connect_device(device_id=last.device_id, profile_id=last.profile_id or None)
+        finally:
+            self._set_home_busy(False)
 
     async def disconnect_device(self) -> None:
+        self._set_home_busy(True)
         if self._workflow_runner.active_state() is not None:
             self._workflow_runner.cancel()
             self._workflow_owned_session_id = None
             self._workflow_status_message = "Workflow cancelled because the device disconnected."
-        if self._recorder.active_session() is not None:
-            self.stop_logging()
-        await self._device_manager.disconnect()
-        self._set_disconnected_state(
-            connection_text="Disconnected",
-            live_status_text="Disconnected",
-            discovery_status_text="Disconnected",
-            diagnostics_text="Disconnected.",
-        )
-        self.refresh_workflows()
+        try:
+            if self._recorder.active_session() is not None:
+                self.stop_logging()
+            await self._device_manager.disconnect()
+            self._set_disconnected_state(
+                connection_text="Disconnected",
+                live_status_text="Disconnected",
+                discovery_status_text="Disconnected",
+                diagnostics_text="Disconnected.",
+            )
+            self.refresh_workflows()
+        finally:
+            self._set_home_busy(False)
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -673,21 +695,40 @@ class AppPresenter:
         *,
         status_text: str,
         devices: tuple[ScannedDeviceViewModel, ...] | None = None,
-        selected_device_id: str | None = None,
+        selected_device_id: object = _UNCHANGED,
     ) -> None:
         with self._lock:
             self._discovery = replace(
                 self._discovery,
                 status_text=status_text,
                 devices=self._discovery.devices if devices is None else devices,
-                selected_device_id=self._discovery.selected_device_id
-                if selected_device_id is None
-                else selected_device_id,
+                selected_device_id=(
+                    self._discovery.selected_device_id
+                    if selected_device_id is _UNCHANGED
+                    else selected_device_id
+                ),
             )
 
     def _report_message(self, message: str) -> None:
         with self._lock:
             self._home = replace(self._home, message_text=message)
+
+    def _set_home_busy(self, is_busy: bool) -> None:
+        with self._lock:
+            self._home = replace(self._home, is_busy=is_busy)
+
+    def _set_discovery_busy(
+        self,
+        *,
+        is_scanning: bool | object = _UNCHANGED,
+        is_connecting: bool | object = _UNCHANGED,
+    ) -> None:
+        with self._lock:
+            self._discovery = replace(
+                self._discovery,
+                is_scanning=self._discovery.is_scanning if is_scanning is _UNCHANGED else is_scanning,
+                is_connecting=self._discovery.is_connecting if is_connecting is _UNCHANGED else is_connecting,
+            )
 
     def _finish_workflow_if_complete(self, state: WorkflowRunState) -> None:
         if state.run.result != WorkflowRunResult.COMPLETED:

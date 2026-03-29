@@ -88,6 +88,7 @@ class HomeViewModel:
     active_session_text: str = "No active session"
     active_device_text: str = "No device connected"
     message_text: str = ""
+    is_busy: bool = False
     recent_devices: tuple[RecentDeviceViewModel, ...] = ()
 
 
@@ -96,6 +97,8 @@ class DiscoveryViewModel:
     status_text: str = "Idle"
     devices: tuple[ScannedDeviceViewModel, ...] = ()
     selected_device_id: str | None = None
+    is_scanning: bool = False
+    is_connecting: bool = False
 
 
 @dataclass(frozen=True, slots=True)

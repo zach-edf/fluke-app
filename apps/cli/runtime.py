@@ -25,15 +25,17 @@ def default_database_path() -> str:
     macOS:   ~/Library/Application Support/fluke-community/fluke.db
     Linux:   ~/.local/share/fluke-community/fluke.db
     Windows: %LOCALAPPDATA%/fluke-community/fluke.db
+    Fallback: data/fluke.db
     """
     app_name = "fluke-community"
     if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
+        db_dir = Path.home() / "Library" / "Application Support" / app_name
     elif sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        db_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / app_name
+    elif sys.platform.startswith("linux"):
+        db_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / app_name
     else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    db_dir = base / app_name
+        db_dir = Path("data")
     db_dir.mkdir(parents=True, exist_ok=True)
     return str(db_dir / "fluke.db")
 

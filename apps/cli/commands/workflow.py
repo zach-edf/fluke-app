@@ -22,7 +22,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     run_parser.add_argument("--workflow", required=True, help="Workflow id to run")
     run_parser.add_argument("--device", required=True, help="BLE device identifier from scan output")
     run_parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to use")
-    run_parser.add_argument("--database", default=None, help="SQLite database path (default: platform data dir)")
+    run_parser.add_argument("--database", default=default_database_path(), help="SQLite database path (default: platform data dir)")
     run_parser.add_argument("--timeout", type=nonneg_float, default=0.0, help="Max seconds to wait for each step reading; 0 waits forever")
     run_parser.set_defaults(func=handle_run)
 
@@ -69,7 +69,7 @@ async def handle_run(args: argparse.Namespace) -> int:
         print(f"Unknown workflow: {args.workflow}", file=sys.stderr)
         return 1
 
-    db_path = args.database or default_database_path()
+    db_path = args.database
     manager = build_device_manager()
     store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
