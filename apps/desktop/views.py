@@ -56,6 +56,21 @@ class _PanelRefs:
     refs: dict[str, object]
 
 
+def _sync_list_rows(list_widget, item_cls, rows: list[tuple[object, str]]) -> None:
+    current_rows = [
+        (list_widget.item(index).data(0x0100), list_widget.item(index).text())
+        for index in range(list_widget.count())
+    ]
+    if current_rows == rows:
+        return
+
+    list_widget.clear()
+    for row_id, label in rows:
+        item = item_cls(label)
+        item.setData(0x0100, row_id)
+        list_widget.addItem(item)
+
+
 def create_main_window(runtime) -> "QWidget":
     qt = _require_qt()
     QWidget = qt["QWidget"]
@@ -107,7 +122,6 @@ def create_main_window(runtime) -> "QWidget":
             self._refresh()
 
         def closeEvent(self, event) -> None:  # type: ignore[override]
-            runtime.close()
             super().closeEvent(event)
 
         def _refresh(self) -> None:
@@ -566,14 +580,14 @@ def _refresh_home(runtime, panel: _PanelRefs) -> None:
     panel.refs["message"].setText(home.message_text)
     recent = panel.refs["recent_devices"]
     item_cls = panel.refs["list_item_cls"]
-    current = [recent.item(index).data(0x0100) for index in range(recent.count())]
-    desired = [device.device_id for device in home.recent_devices]
-    if current != desired:
-        recent.clear()
-        for device in home.recent_devices:
-            item = item_cls(f"{device.label} | support={device.support_text} | last_seen={device.last_seen_text}")
-            item.setData(0x0100, device.device_id)
-            recent.addItem(item)
+    _sync_list_rows(
+        recent,
+        item_cls,
+        [
+            (device.device_id, f"{device.label} | support={device.support_text} | last_seen={device.last_seen_text}")
+            for device in home.recent_devices
+        ],
+    )
 
 
 def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
@@ -581,15 +595,14 @@ def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
     panel.refs["status"].setText(discovery.status_text)
     list_widget = panel.refs["device_list"]
     item_cls = panel.refs["list_item_cls"]
-    current_ids = [list_widget.item(index).data(0x0100) for index in range(list_widget.count())]
-    desired_ids = [device.device_id for device in discovery.devices]
-    if current_ids != desired_ids:
-        list_widget.clear()
-        for device in discovery.devices:
-            label = f"{device.label} | {device.model_name} | {device.rssi_text} | {device.support_text}"
-            item = item_cls(label)
-            item.setData(0x0100, device.device_id)
-            list_widget.addItem(item)
+    _sync_list_rows(
+        list_widget,
+        item_cls,
+        [
+            (device.device_id, f"{device.label} | {device.model_name} | {device.rssi_text} | {device.support_text}")
+            for device in discovery.devices
+        ],
+    )
     if discovery.selected_device_id is not None:
         for index in range(list_widget.count()):
             item = list_widget.item(index)
@@ -636,15 +649,14 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     panel.refs["export_status"].setText(session.export_status_text)
     recent = panel.refs["recent"]
     item_cls = panel.refs["list_item_cls"]
-    current_ids = [recent.item(index).data(0x0100) for index in range(recent.count())]
-    desired_ids = [entry.session_id for entry in session.recent_sessions]
-    if current_ids != desired_ids:
-        recent.clear()
-        for entry in session.recent_sessions:
-            label = f"{entry.title} | {entry.started_at_text} | ended={entry.ended_at_text}"
-            item = item_cls(label)
-            item.setData(0x0100, entry.session_id)
-            recent.addItem(item)
+    _sync_list_rows(
+        recent,
+        item_cls,
+        [
+            (entry.session_id, f"{entry.title} | {entry.started_at_text} | ended={entry.ended_at_text}")
+            for entry in session.recent_sessions
+        ],
+    )
     if session.selected_session_id is not None:
         for index in range(recent.count()):
             item = recent.item(index)
@@ -656,14 +668,14 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     if notes.toPlainText() != session.selected_session_notes:
         notes.setPlainText(session.selected_session_notes)
     markers = panel.refs["markers"]
-    current_marker_ids = [markers.item(index).data(0x0100) for index in range(markers.count())]
-    desired_marker_ids = [marker.marker_id for marker in session.selected_markers]
-    if current_marker_ids != desired_marker_ids:
-        markers.clear()
-        for marker in session.selected_markers:
-            item = item_cls(f"{marker.timestamp_text} | {marker.label} | {marker.note}")
-            item.setData(0x0100, marker.marker_id)
-            markers.addItem(item)
+    _sync_list_rows(
+        markers,
+        item_cls,
+        [
+            (marker.marker_id, f"{marker.timestamp_text} | {marker.label} | {marker.note}")
+            for marker in session.selected_markers
+        ],
+    )
     panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_chart"].setEnabled(bool(session.chart_points))
@@ -699,14 +711,11 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
 
     workflow_list = panel.refs["workflow_list"]
     item_cls = panel.refs["list_item_cls"]
-    current_ids = [workflow_list.item(index).data(0x0100) for index in range(workflow_list.count())]
-    desired_ids = [item.workflow_id for item in workflow.workflows]
-    if current_ids != desired_ids:
-        workflow_list.clear()
-        for item in workflow.workflows:
-            row = item_cls(f"{item.title} | {item.category} | {item.step_count_text}")
-            row.setData(0x0100, item.workflow_id)
-            workflow_list.addItem(row)
+    _sync_list_rows(
+        workflow_list,
+        item_cls,
+        [(item.workflow_id, f"{item.title} | {item.category} | {item.step_count_text}") for item in workflow.workflows],
+    )
     if workflow.selected_workflow_id is not None:
         for index in range(workflow_list.count()):
             item = workflow_list.item(index)
@@ -716,24 +725,24 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
                 break
 
     completed_steps = panel.refs["completed_steps"]
-    current_step_ids = [completed_steps.item(index).data(0x0100) for index in range(completed_steps.count())]
-    desired_step_ids = [item.step_id for item in workflow.completed_steps]
-    if current_step_ids != desired_step_ids:
-        completed_steps.clear()
-        for item in workflow.completed_steps:
-            row = item_cls(f"{item.title} | {item.status_text} | {item.detail_text}")
-            row.setData(0x0100, item.step_id)
-            completed_steps.addItem(row)
+    _sync_list_rows(
+        completed_steps,
+        item_cls,
+        [
+            (item.step_id, f"{item.title} | {item.status_text} | {item.detail_text}")
+            for item in workflow.completed_steps
+        ],
+    )
 
     recent_runs = panel.refs["recent_runs"]
-    current_run_ids = [recent_runs.item(index).data(0x0100) for index in range(recent_runs.count())]
-    desired_run_ids = [item.run_id for item in workflow.recent_runs]
-    if current_run_ids != desired_run_ids:
-        recent_runs.clear()
-        for item in workflow.recent_runs:
-            row = item_cls(f"{item.title} | {item.started_at_text} | {item.result_text} | session={item.session_id}")
-            row.setData(0x0100, item.run_id)
-            recent_runs.addItem(row)
+    _sync_list_rows(
+        recent_runs,
+        item_cls,
+        [
+            (item.run_id, f"{item.title} | {item.started_at_text} | {item.result_text} | session={item.session_id}")
+            for item in workflow.recent_runs
+        ],
+    )
 
     panel.refs["start_button"].setEnabled(workflow.selected_workflow_id is not None and not workflow.is_running)
     panel.refs["complete_button"].setEnabled(workflow.is_running)

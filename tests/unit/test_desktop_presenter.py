@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from pathlib import Path
@@ -14,6 +15,12 @@ from fluke_protocol import ProfileRegistry
 from fluke_protocol.profiles.fluke_376fc import FLUKE_MEAS_UUID, FLUKE_STATUS_UUID, Fluke376FCProfile
 from fluke_store import FlukeStore
 from fluke_testing import FakeBleAdapter, ReplayFrame, ReplayScenario
+
+
+class HangingSubscribeAdapter(FakeBleAdapter):
+    async def subscribe(self, device_id: str, characteristic_uuid: str, callback) -> None:  # type: ignore[override]
+        self._require_connected(device_id)
+        await asyncio.Event().wait()
 
 
 class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
@@ -156,6 +163,39 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(workflow_vm.recent_runs[0].result_text, "Completed")
             self.assertFalse(presenter.live_view_model().is_logging)
             self.assertGreaterEqual(len(store.markers.list_for_session(store.workflow_runs.get(run_id).session_id)), 5)
+        finally:
+            store.close()
+
+    async def test_presenter_reports_stream_start_timeout_and_disconnects(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-timeout.db")
+        adapter = HangingSubscribeAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-timeout",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:11",
+                    rssi=-51,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store, device_operation_timeout_s=0.01)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            with self.assertRaisesRegex(RuntimeError, "live stream startup timed out"):
+                await presenter.connect_device("meter-timeout")
+
+            self.assertFalse(adapter.is_connected("meter-timeout"))
+            self.assertEqual(presenter.live_view_model().connection_text, "Disconnected")
+            self.assertEqual(presenter.live_view_model().status_text, "Disconnected")
+            self.assertIn("timed out", presenter.discovery_view_model().status_text)
+            self.assertIn("timed out", presenter.settings_view_model().diagnostics_text)
         finally:
             store.close()
 

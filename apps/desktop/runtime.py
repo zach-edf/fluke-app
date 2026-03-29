@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+from typing import Any
 
 from apps.desktop.presenters import AppPresenter
 from fluke_app import DeviceManager, EventBus, ReadingStreamService
@@ -14,7 +15,7 @@ from fluke_store import FlukeStore
 @dataclass(slots=True)
 class DesktopRuntime:
     presenter: AppPresenter
-    runner: "AsyncRunner"
+    runner: object
     store: FlukeStore
     _closed: bool = False
 
@@ -26,7 +27,8 @@ class DesktopRuntime:
             return
         self._closed = True
         try:
-            self.submit(self.presenter.shutdown()).result(timeout=5)
+            future = self.submit(self.presenter.shutdown())
+            self.runner.wait(future, timeout=5)
         except Exception:
             pass
         self.runner.close()
@@ -45,6 +47,9 @@ class AsyncRunner:
         if self._loop is None:
             raise RuntimeError("Async runner is not ready.")
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+    def wait(self, future: object, timeout: float | None = None) -> Any:
+        return future.result(timeout=timeout)
 
     def close(self) -> None:
         if self._loop is None:
@@ -67,11 +72,37 @@ class AsyncRunner:
         loop.close()
 
 
+class LoopRunner:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def submit(self, coro: object) -> object:
+        return self._loop.create_task(coro)
+
+    def wait(self, future: object, timeout: float | None = None) -> Any:
+        if future.done():
+            return future.result()
+        if self._loop.is_running():
+            raise RuntimeError("Cannot synchronously wait while the Qt asyncio loop is still running.")
+        return self._loop.run_until_complete(asyncio.wait_for(asyncio.shield(future), timeout=timeout))
+
+    def close(self) -> None:
+        if self._loop.is_running() or self._loop.is_closed():
+            return
+        pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        self._loop.close()
+
+
 def build_runtime(
     *,
     ble_adapter: object | None = None,
     store_path: str | Path = "data/fluke.db",
     app_version: str = "0.1.0",
+    event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> DesktopRuntime:
     adapter = ble_adapter if ble_adapter is not None else _build_bleak_adapter()
     store = FlukeStore(store_path)
@@ -83,9 +114,10 @@ def build_runtime(
         event_bus=EventBus(),
         reading_stream=ReadingStreamService(),
     )
+    runner = LoopRunner(event_loop) if event_loop is not None else AsyncRunner()
     return DesktopRuntime(
         presenter=AppPresenter(manager, store, app_version=app_version, workflow_catalog=workflow_catalog),
-        runner=AsyncRunner(),
+        runner=runner,
         store=store,
     )
 
