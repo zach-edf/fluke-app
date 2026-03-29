@@ -13,7 +13,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     bundle_parser = debug_subparsers.add_parser("bundle", help="Export a debug bundle zip")
     bundle_parser.add_argument("--output", required=True, help="Zip path to create")
-    bundle_parser.add_argument("--database", default=default_database_path(), help="SQLite database to summarize (default: platform data dir)")
+    bundle_parser.add_argument("--database", default=None, help="SQLite database to summarize (default: platform data dir)")
     bundle_parser.set_defaults(func=handle_bundle)
 
 
@@ -26,7 +26,7 @@ async def handle_bundle(args: argparse.Namespace) -> int:
         profile_registry=profile_registry,
         workflow_catalog=workflow_catalog,
         plugin_bundle=plugin_bundle,
-        database_path=args.database,
+        database_path=args.database or default_database_path(),
     )
     print(output)
     return 0

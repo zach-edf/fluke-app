@@ -36,7 +36,6 @@ def default_database_path() -> str:
         db_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / app_name
     else:
         db_dir = Path("data")
-    db_dir.mkdir(parents=True, exist_ok=True)
     return str(db_dir / "fluke.db")
 
 

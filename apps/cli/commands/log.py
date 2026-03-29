@@ -15,7 +15,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser = subparsers.add_parser("log", help="Connect, record readings to SQLite, and optionally export")
     parser.add_argument("--device", required=True, help="BLE device identifier from scan output")
     parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to use")
-    parser.add_argument("--database", default=default_database_path(), help="SQLite database path (default: platform data dir)")
+    parser.add_argument("--database", default=None, help="SQLite database path (default: platform data dir)")
     parser.add_argument("--duration", type=nonneg_float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
     parser.add_argument("--count", type=nonneg_int, default=0, help="Stop after N readings")
     parser.add_argument("--title", default=None, help="Optional session title")
@@ -28,7 +28,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle(args: argparse.Namespace) -> int:
-    db_path = args.database
+    db_path = args.database or default_database_path()
     manager = build_device_manager()
     store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
