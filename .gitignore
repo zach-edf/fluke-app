@@ -22,3 +22,5 @@ __pycache__/
 .tmp/
 exports/
 .test-tmp/
+fluke_community.egg-info/
+
