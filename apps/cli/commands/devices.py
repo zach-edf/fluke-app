@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from apps.cli.formatters import format_profile, output_list, profile_to_dict
 from fluke_plugins import build_profile_registry
 
 
@@ -14,11 +15,11 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle_supported(args: argparse.Namespace) -> int:
-    del args
     profiles = build_profile_registry().all()
-    print("Supported device profiles:")
-    for profile in profiles:
-        capabilities = ", ".join(profile.capabilities())
-        print(f"- {profile.model_name} ({profile.profile_id})")
-        print(f"  capabilities={capabilities}")
+
+    if getattr(args, "json", False):
+        output_list(profiles, True, format_profile, profile_to_dict)
+    else:
+        print("Supported device profiles:")
+        output_list(profiles, False, format_profile, profile_to_dict)
     return 0

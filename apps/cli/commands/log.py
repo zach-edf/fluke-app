@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 
-from apps.cli.runtime import build_device_manager, open_store
+from apps.cli.formatters import format_reading, nonneg_float, nonneg_int, parse_tags
+from apps.cli.runtime import build_device_manager, default_database_path, open_store
 from fluke_app import ExportService, SessionRecorder, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 from fluke_core.models.reading import Reading
@@ -13,9 +15,9 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser = subparsers.add_parser("log", help="Connect, record readings to SQLite, and optionally export")
     parser.add_argument("--device", required=True, help="BLE device identifier from scan output")
     parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to use")
-    parser.add_argument("--database", default="data/fluke.db", help="SQLite database path")
-    parser.add_argument("--duration", type=float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
-    parser.add_argument("--count", type=int, default=0, help="Stop after N readings")
+    parser.add_argument("--database", default=None, help="SQLite database path (default: platform data dir)")
+    parser.add_argument("--duration", type=nonneg_float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
+    parser.add_argument("--count", type=nonneg_int, default=0, help="Stop after N readings")
     parser.add_argument("--title", default=None, help="Optional session title")
     parser.add_argument("--notes", default=None, help="Optional session notes")
     parser.add_argument("--tags", default="", help="Comma-separated session tags")
@@ -26,16 +28,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle(args: argparse.Namespace) -> int:
+    db_path = args.database or default_database_path()
     manager = build_device_manager()
-    store = open_store(args.database)
+    store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
-    export_service = ExportService(
-        store.sessions,
-        store.readings,
-        store.markers,
-        SessionCsvExporter(),
-        SessionJsonExporter(device_repo=store.devices),
-    )
 
     recorded = 0
     finished = asyncio.Event()
@@ -45,13 +41,14 @@ async def handle(args: argparse.Namespace) -> int:
         recorder.on_reading(reading)
         recorded += 1
         if not args.quiet:
-            print(_format_reading(reading))
+            print(format_reading(reading))
         if args.count and recorded >= args.count:
             finished.set()
 
     manager.subscribe_readings(on_reading)
 
     try:
+        print(f"Connecting to {args.device}...", file=sys.stderr)
         device = await manager.connect(args.device, profile_id=args.profile)
         store.upsert_device(device)
 
@@ -60,7 +57,7 @@ async def handle(args: argparse.Namespace) -> int:
                 device_id=device.device_id,
                 title=args.title,
                 notes=args.notes,
-                tags=_parse_tags(args.tags),
+                tags=parse_tags(args.tags),
                 app_version="0.1.0",
                 profile_id=device.profile_id or args.profile,
             )
@@ -88,10 +85,10 @@ async def handle(args: argparse.Namespace) -> int:
     if completed is None:
         raise RuntimeError("Session did not start.")
 
-    print(f"Saved session {completed.session_id} with {recorded} readings to {args.database}.")
+    print(f"Saved session {completed.session_id} with {recorded} readings to {db_path}.")
 
     if args.csv_output or args.json_output:
-        store = open_store(args.database)
+        store = open_store(db_path)
         try:
             export_service = ExportService(
                 store.sessions,
@@ -108,18 +105,3 @@ async def handle(args: argparse.Namespace) -> int:
             store.close()
 
     return 0
-
-
-def _parse_tags(raw: str) -> list[str]:
-    return [tag.strip() for tag in raw.split(",") if tag.strip()]
-
-
-def _format_reading(reading: Reading) -> str:
-    value = "-" if reading.value is None else f"{reading.value:.6g}"
-    mode = reading.mode or "-"
-    return (
-        f"{reading.timestamp_utc.isoformat()} | "
-        f"{reading.display_text or '-'} | "
-        f"value={value} {reading.unit or ''}".rstrip()
-        + f" | type={reading.measurement_type.value} | mode={mode} | status={reading.status.value}"
-    )

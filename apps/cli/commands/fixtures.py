@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from apps.cli.formatters import nonneg_int, positive_float
 from apps.cli.runtime import require_bleak_adapter
 from fluke_plugins import build_profile_registry
 from fluke_testing import capture_fixture
@@ -14,8 +15,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     capture_parser = fixture_subparsers.add_parser("capture", help="Capture a raw BLE fixture JSON")
     capture_parser.add_argument("--device", required=True, help="BLE device identifier from scan output")
     capture_parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to capture")
-    capture_parser.add_argument("--duration", type=float, default=10.0, help="Capture duration in seconds")
-    capture_parser.add_argument("--count", type=int, default=0, help="Stop after N frames; 0 means duration only")
+    capture_parser.add_argument("--duration", type=positive_float, default=10.0, help="Capture duration in seconds")
+    capture_parser.add_argument("--count", type=nonneg_int, default=0, help="Stop after N frames; 0 means duration only")
     capture_parser.add_argument("--output", required=True, help="Output JSON file")
     capture_parser.set_defaults(func=handle_capture)
 

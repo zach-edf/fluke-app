@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import argparse
 
-from apps.cli.runtime import open_store
+from apps.cli.formatters import output_list, format_session, session_to_dict, positive_int
+from apps.cli.runtime import default_database_path, open_store
 from fluke_app import ExportService
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 
 
 def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("sessions", help="List and export recorded sessions")
-    parser.add_argument("--database", default="data/fluke.db", help="SQLite database path")
+    parser.add_argument("--database", default=None, help="SQLite database path (default: platform data dir)")
     session_subparsers = parser.add_subparsers(dest="sessions_command", required=True)
 
     list_parser = session_subparsers.add_parser("list", help="List recent sessions")
-    list_parser.add_argument("--limit", type=int, default=20, help="How many sessions to show")
+    list_parser.add_argument("--limit", type=positive_int, default=20, help="How many sessions to show")
     list_parser.set_defaults(func=handle_list)
 
     export_parser = session_subparsers.add_parser("export", help="Export a recorded session")
@@ -24,29 +25,29 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle_list(args: argparse.Namespace) -> int:
-    store = open_store(args.database)
+    store = open_store(args.database or default_database_path())
     try:
         sessions = store.sessions.list_recent(limit=args.limit)
     finally:
         store.close()
 
     if not sessions:
-        print("No sessions found.")
+        if not getattr(args, "json", False):
+            print("No sessions found.")
+        else:
+            print("[]")
         return 0
 
-    print("Recent sessions:")
-    for session in sessions:
-        ended = session.ended_at.isoformat() if session.ended_at else "-"
-        title = session.title or "-"
-        print(
-            f"- {session.session_id} | device={session.device_id} | "
-            f"started={session.started_at.isoformat()} | ended={ended} | title={title}"
-        )
+    if getattr(args, "json", False):
+        output_list(sessions, True, format_session, session_to_dict)
+    else:
+        print("Recent sessions:")
+        output_list(sessions, False, format_session, session_to_dict)
     return 0
 
 
 async def handle_export(args: argparse.Namespace) -> int:
-    store = open_store(args.database)
+    store = open_store(args.database or default_database_path())
     try:
         service = ExportService(
             store.sessions,

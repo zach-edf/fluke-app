@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from typing import TYPE_CHECKING
 
 from fluke_sdk.bootstrap import ensure_repo_paths
 
@@ -12,6 +13,9 @@ from fluke_app.device_manager import DeviceManager
 from fluke_ble.adapter import BleAdapter
 from fluke_core import ConnectionState, DeviceInfo, Reading
 from fluke_plugins import build_profile_registry
+
+if TYPE_CHECKING:
+    from fluke_protocol.registry import ProfileRegistry
 
 
 _SENTINEL = object()

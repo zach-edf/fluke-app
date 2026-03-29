@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 
+from apps.cli.formatters import format_plugin, output_list, plugin_to_dict
 from apps.cli.runtime import load_extensions
 
 
@@ -14,21 +15,18 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 
 async def handle_list(args: argparse.Namespace) -> int:
-    del args
     bundle = load_extensions()
+
     if not bundle.plugins:
-        print("No external plugins loaded.")
+        if getattr(args, "json", False):
+            print("[]")
+        else:
+            print("No external plugins loaded.")
         return 0
 
-    print("Loaded plugins:")
-    for plugin in bundle.plugins:
-        print(f"- {plugin.manifest.name} ({plugin.manifest.plugin_id}) v{plugin.manifest.version}")
-        if plugin.manifest.description:
-            print(f"  description={plugin.manifest.description}")
-        if plugin.profiles:
-            print(f"  profiles={', '.join(profile.profile_id for profile in plugin.profiles)}")
-        if plugin.workflow_paths:
-            print(f"  workflow_paths={', '.join(str(path) for path in plugin.workflow_paths)}")
-        if plugin.fixture_paths:
-            print(f"  fixture_paths={', '.join(str(path) for path in plugin.fixture_paths)}")
+    if getattr(args, "json", False):
+        output_list(bundle.plugins, True, format_plugin, plugin_to_dict)
+    else:
+        print("Loaded plugins:")
+        output_list(bundle.plugins, False, format_plugin, plugin_to_dict)
     return 0

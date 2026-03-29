@@ -1,8 +1,41 @@
 from __future__ import annotations
 
+import logging
+import os
+import sys
+from pathlib import Path
+
 from fluke_app import DeviceManager, EventBus, ReadingStreamService
 from fluke_plugins import build_profile_registry, build_workflow_catalog, load_plugin_bundle
 from fluke_store import FlukeStore
+
+
+def configure_logging(verbose: bool = False) -> None:
+    """Set up Python logging based on verbosity."""
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+
+
+def default_database_path() -> str:
+    """Return a platform-appropriate default database path.
+
+    macOS:   ~/Library/Application Support/fluke-community/fluke.db
+    Linux:   ~/.local/share/fluke-community/fluke.db
+    Windows: %LOCALAPPDATA%/fluke-community/fluke.db
+    """
+    app_name = "fluke-community"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    db_dir = base / app_name
+    db_dir.mkdir(parents=True, exist_ok=True)
+    return str(db_dir / "fluke.db")
 
 
 def require_bleak_adapter() -> type[object]:
@@ -23,8 +56,8 @@ def build_device_manager() -> DeviceManager:
     )
 
 
-def open_store(path: str) -> FlukeStore:
-    return FlukeStore(path)
+def open_store(path: str | None = None) -> FlukeStore:
+    return FlukeStore(path or default_database_path())
 
 
 def load_extensions():
