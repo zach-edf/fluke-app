@@ -254,7 +254,7 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
-    async def test_presenter_filters_session_replay_by_measurement_context(self) -> None:
+    async def test_presenter_filters_session_replay_by_cleaned_measurement_context(self) -> None:
         tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
         tmp = tmp_root / uuid4().hex
         tmp.mkdir(parents=True, exist_ok=False)
@@ -279,6 +279,32 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             await presenter.connect_device("meter-session-filter")
             session_id = presenter.start_logging(title="Mixed Session")
 
+            resistance_1 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1200 ohm", "")),
+                )
+            )
+            await resistance_1.run(adapter, "meter-session-filter")
+            presenter.add_marker("Resistance capture 1", label="note")
+
+            resistance_2 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.3 kOhm", "dc")),
+                )
+            )
+            await resistance_2.run(adapter, "meter-session-filter")
+            presenter.add_marker("Resistance capture 2", label="note")
+
+            unknown_transition = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("OL", "dc")),
+                )
+            )
+            await unknown_transition.run(adapter, "meter-session-filter")
+
             voltage_reading = ReplayScenario(
                 (
                     ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
@@ -287,29 +313,32 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             )
             await voltage_reading.run(adapter, "meter-session-filter")
             presenter.add_marker("Voltage capture", label="note")
-
-            current_reading = ReplayScenario(
-                (
-                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
-                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.25 A", "ac")),
-                )
-            )
-            await current_reading.run(adapter, "meter-session-filter")
-            presenter.add_marker("Current capture", label="note")
             presenter.stop_logging()
 
             presenter.select_session(session_id)
             full_session = presenter.session_view_model()
             self.assertEqual(len(full_session.available_contexts), 2)
+            self.assertEqual([ctx.label for ctx in full_session.available_contexts], ["Resistance", "Voltage DC"])
+            self.assertEqual(full_session.selected_context_label, "Resistance")
+            self.assertEqual(full_session.selected_unit_text, "kOhm")
             self.assertEqual(len(full_session.chart_points), 2)
             self.assertEqual(len(full_session.selected_markers), 2)
+            self.assertIn("Samples 2", full_session.selected_summary_text)
 
-            current_context = next(ctx for ctx in full_session.available_contexts if "Current" in ctx.label)
-            presenter.select_session_context(current_context.context_id)
+            presenter.select_session_context(None)
+            mixed_session = presenter.session_view_model()
+            self.assertEqual(mixed_session.selected_context_id, None)
+            self.assertEqual(mixed_session.selected_context_label, "All Measurements")
+            self.assertEqual(len(mixed_session.chart_points), 0)
+            self.assertEqual(len(mixed_session.selected_markers), 3)
+            self.assertIn("Mixed measurement session", mixed_session.selected_summary_text)
+
+            voltage_context = next(ctx for ctx in full_session.available_contexts if ctx.label == "Voltage DC")
+            presenter.select_session_context(voltage_context.context_id)
             filtered_session = presenter.session_view_model()
-            self.assertEqual(filtered_session.selected_context_id, current_context.context_id)
-            self.assertEqual(filtered_session.selected_context_label, current_context.label)
-            self.assertEqual(filtered_session.selected_unit_text, "A")
+            self.assertEqual(filtered_session.selected_context_id, voltage_context.context_id)
+            self.assertEqual(filtered_session.selected_context_label, voltage_context.label)
+            self.assertEqual(filtered_session.selected_unit_text, "V")
             self.assertEqual(len(filtered_session.chart_points), 1)
             self.assertEqual(len(filtered_session.selected_markers), 1)
             self.assertIn("Samples 1", filtered_session.selected_summary_text)

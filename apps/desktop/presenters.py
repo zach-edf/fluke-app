@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 import threading
 
 from apps.desktop.viewmodels import (
@@ -25,7 +26,7 @@ from apps.desktop.viewmodels import (
 )
 from fluke_app import ExportService, SessionRecorder, WorkflowRunner, load_workflow_catalog, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
-from fluke_core.enums import WorkflowRunResult, WorkflowStepResultStatus
+from fluke_core.enums import MeasurementType, WorkflowRunResult, WorkflowStepResultStatus
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.reading import Reading
@@ -34,6 +35,32 @@ from fluke_core.models.workflow import WorkflowDefinition, WorkflowRun, Workflow
 from fluke_core.services.statistics import summarize_readings
 
 _UNCHANGED = object()
+_UNKNOWN_REPLAY_THRESHOLD = 5
+_REPLAY_UNIT_SCALES: dict[str, tuple[tuple[str, float], ...]] = {
+    "voltage": (("uV", 1e-6), ("mV", 1e-3), ("V", 1.0), ("kV", 1e3)),
+    "current": (("uA", 1e-6), ("mA", 1e-3), ("A", 1.0)),
+    "resistance": (("ohm", 1.0), ("kOhm", 1e3), ("MOhm", 1e6)),
+    "capacitance": (("pF", 1e-12), ("nF", 1e-9), ("uF", 1e-6), ("mF", 1e-3), ("F", 1.0)),
+    "frequency": (("Hz", 1.0), ("kHz", 1e3), ("MHz", 1e6)),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayDescriptor:
+    context_id: str
+    label: str
+    normalization_key: str | None
+    is_unknown: bool = False
+
+
+@dataclass(slots=True)
+class _ReplayGroup:
+    context_id: str
+    label: str
+    display_text: str
+    readings: list[Reading]
+    total_count: int
+    numeric_count: int
 
 
 class AppPresenter:
@@ -567,26 +594,55 @@ class AppPresenter:
             raise RuntimeError(f"Unknown session {session_id!r}.")
         readings = self._store.readings.list_for_session(session_id)
         markers = self._store.markers.list_for_session(session_id)
-        contexts = tuple(_session_context_view_models(readings))
         current_session = self.session_view_model()
-        selected_context_id = current_session.selected_context_id if current_session.selected_session_id == session_id else None
-        if selected_context_id is not None and selected_context_id not in {ctx.context_id for ctx in contexts}:
+        replay_groups = _build_session_replay_groups(readings)
+        same_session = current_session.selected_session_id == session_id
+        selected_context_id = current_session.selected_context_id if same_session else None
+        if selected_context_id is not None and selected_context_id not in {group.context_id for group in replay_groups}:
             selected_context_id = None
+        if selected_context_id is None and replay_groups and (not same_session or not current_session.available_contexts):
+            if len(replay_groups) > 1:
+                selected_context_id = replay_groups[0].context_id
 
-        filtered_readings = readings if selected_context_id is None else [
-            reading for reading in readings if _reading_context_id(reading) == selected_context_id
-        ]
-        filtered_markers = markers if selected_context_id is None else _markers_for_context(
-            readings,
-            markers,
-            selected_context_id,
-        )
-        stats = summarize_readings(filtered_readings)
+        if selected_context_id is None and len(replay_groups) > 1:
+            filtered_readings = []
+            filtered_markers = markers
+            selected_summary_text = (
+                f"Mixed measurement session across {len(replay_groups)} replay views. "
+                "Select a measurement view to chart readings."
+            )
+            unit_text = ""
+            context_label = "All Measurements"
+            reading_count_text = f"{len(readings)} readings"
+        else:
+            selected_group = (
+                replay_groups[0]
+                if selected_context_id is None and replay_groups
+                else next((group for group in replay_groups if group.context_id == selected_context_id), None)
+            )
+            filtered_readings = [] if selected_group is None else selected_group.readings
+            filtered_markers = markers if selected_group is None else _markers_for_context(
+                readings,
+                markers,
+                selected_group.context_id,
+            )
+            stats = summarize_readings(filtered_readings)
+            selected_summary_text = _summary_text(stats)
+            unit_text = next((reading.unit for reading in filtered_readings if reading.unit), "")
+            context_label = "" if selected_group is None else selected_group.label
+            reading_count_text = f"{len(filtered_readings)} readings"
+
         points = tuple(_chart_points(filtered_readings))
         marker_points = tuple(_marker_points(filtered_readings, filtered_markers))
         marker_rows = tuple(_marker_vm(marker) for marker in filtered_markers)
-        unit_text = next((reading.unit for reading in filtered_readings if reading.unit), "")
-        context_label = next((ctx.label for ctx in contexts if ctx.context_id == selected_context_id), "")
+        contexts = tuple(
+            SessionContextViewModel(
+                context_id=group.context_id,
+                label=group.label,
+                display_text=group.display_text,
+            )
+            for group in replay_groups
+        )
         with self._lock:
             self._session = replace(
                 self._session,
@@ -594,9 +650,9 @@ class AppPresenter:
                 selected_context_id=selected_context_id,
                 selected_context_label=context_label,
                 active_title_text=session.title or session.session_id,
-                reading_count_text=f"{len(filtered_readings)} readings",
-                available_contexts=contexts,
-                selected_summary_text=_summary_text(stats),
+                reading_count_text=reading_count_text,
+                available_contexts=contexts if len(contexts) > 1 else (),
+                selected_summary_text=selected_summary_text,
                 selected_unit_text=unit_text,
                 selected_session_notes=session.notes or "",
                 selected_markers=marker_rows,
@@ -937,24 +993,148 @@ def _reading_context_label(reading: Reading) -> str:
     return " / ".join(parts)
 
 
-def _session_context_view_models(readings: list[Reading]) -> list[SessionContextViewModel]:
-    grouped: dict[str, tuple[str, int]] = {}
-    ordered_ids: list[str] = []
+def _build_session_replay_groups(readings: list[Reading]) -> list[_ReplayGroup]:
+    grouped: dict[str, tuple[_ReplayDescriptor, list[Reading]]] = {}
     for reading in readings:
-        context_id = _reading_context_id(reading)
-        if context_id not in grouped:
-            ordered_ids.append(context_id)
-            grouped[context_id] = (_reading_context_label(reading), 0)
-        label, count = grouped[context_id]
-        grouped[context_id] = (label, count + 1)
-    return [
-        SessionContextViewModel(
-            context_id=context_id,
-            label=grouped[context_id][0],
-            display_text=f"{grouped[context_id][0]} ({grouped[context_id][1]} readings)",
+        descriptor = _replay_descriptor(reading)
+        current = grouped.get(descriptor.context_id)
+        if current is None:
+            grouped[descriptor.context_id] = (descriptor, [reading])
+        else:
+            current[1].append(reading)
+
+    has_known_groups = any(not descriptor.is_unknown for descriptor, _ in grouped.values())
+    groups: list[_ReplayGroup] = []
+    for descriptor, raw_group in grouped.values():
+        numeric_count = sum(1 for reading in raw_group if reading.value is not None)
+        if numeric_count == 0:
+            continue
+        if descriptor.is_unknown and has_known_groups and len(raw_group) <= _UNKNOWN_REPLAY_THRESHOLD:
+            continue
+        normalized_group = _normalize_replay_group(raw_group, descriptor)
+        groups.append(
+            _ReplayGroup(
+                context_id=descriptor.context_id,
+                label=descriptor.label,
+                display_text=f"{descriptor.label} ({len(raw_group)} readings)",
+                readings=normalized_group,
+                total_count=len(raw_group),
+                numeric_count=numeric_count,
+            )
         )
-        for context_id in ordered_ids
+
+    groups.sort(key=lambda group: (-group.total_count, group.label))
+    return groups
+
+
+def _replay_descriptor(reading: Reading) -> _ReplayDescriptor:
+    measurement_type = reading.measurement_type
+    unit_family = str(reading.metadata.get("unit_family") or "").strip().lower()
+
+    if measurement_type == MeasurementType.VOLTAGE_AC:
+        return _ReplayDescriptor("voltage_ac", "Voltage AC", "voltage")
+    if measurement_type == MeasurementType.VOLTAGE_DC:
+        return _ReplayDescriptor("voltage_dc", "Voltage DC", "voltage")
+    if measurement_type == MeasurementType.CURRENT_AC:
+        return _ReplayDescriptor("current_ac", "Current AC", "current")
+    if measurement_type == MeasurementType.CURRENT_DC:
+        return _ReplayDescriptor("current_dc", "Current DC", "current")
+    if measurement_type == MeasurementType.CURRENT_AC_DC:
+        return _ReplayDescriptor("current_acdc", "Current AC+DC", "current")
+    if measurement_type == MeasurementType.CURRENT_INRUSH:
+        return _ReplayDescriptor("current_inrush", "Current Inrush", "current")
+    if measurement_type == MeasurementType.RESISTANCE:
+        return _ReplayDescriptor("resistance", "Resistance", "resistance")
+    if measurement_type == MeasurementType.CAPACITANCE:
+        return _ReplayDescriptor("capacitance", "Capacitance", "capacitance")
+    if measurement_type == MeasurementType.FREQUENCY:
+        return _ReplayDescriptor("frequency", "Frequency", "frequency")
+    if measurement_type == MeasurementType.DUTY_CYCLE:
+        return _ReplayDescriptor("duty_cycle", "Duty Cycle", None)
+    if measurement_type == MeasurementType.TEMPERATURE:
+        unit_suffix = f" {reading.unit}" if reading.unit else ""
+        context_id = f"temperature:{reading.unit or 'unknown'}"
+        return _ReplayDescriptor(context_id, f"Temperature{unit_suffix}", None)
+    if measurement_type == MeasurementType.CONTINUITY:
+        return _ReplayDescriptor("continuity", "Continuity", None)
+
+    if unit_family == "voltage":
+        if reading.mode == "ac":
+            return _ReplayDescriptor("voltage_ac", "Voltage AC", "voltage")
+        if reading.mode == "dc" or reading.unit == "mV":
+            return _ReplayDescriptor("voltage_dc", "Voltage DC", "voltage")
+        return _ReplayDescriptor("voltage", "Voltage", "voltage")
+    if unit_family == "current":
+        if reading.mode == "ac":
+            return _ReplayDescriptor("current_ac", "Current AC", "current")
+        if reading.mode == "dc":
+            return _ReplayDescriptor("current_dc", "Current DC", "current")
+        if reading.mode == "acdc":
+            return _ReplayDescriptor("current_acdc", "Current AC+DC", "current")
+        return _ReplayDescriptor("current", "Current", "current")
+    if unit_family == "resistance":
+        return _ReplayDescriptor("resistance", "Resistance", "resistance")
+    if unit_family == "capacitance":
+        return _ReplayDescriptor("capacitance", "Capacitance", "capacitance")
+    if unit_family == "frequency":
+        return _ReplayDescriptor("frequency", "Frequency", "frequency")
+    if unit_family == "duty_cycle":
+        return _ReplayDescriptor("duty_cycle", "Duty Cycle", None)
+    if unit_family == "temperature":
+        unit_suffix = f" {reading.unit}" if reading.unit else ""
+        context_id = f"temperature:{reading.unit or 'unknown'}"
+        return _ReplayDescriptor(context_id, f"Temperature{unit_suffix}", None)
+
+    return _ReplayDescriptor("unknown", "Unknown / Transitional", None, is_unknown=True)
+
+
+def _normalize_replay_group(readings: list[Reading], descriptor: _ReplayDescriptor) -> list[Reading]:
+    if descriptor.normalization_key is None:
+        return readings
+
+    unit_scale = dict(_REPLAY_UNIT_SCALES[descriptor.normalization_key])
+    base_values = [
+        _base_unit_value(reading, descriptor.normalization_key)
+        for reading in readings
+        if reading.value is not None
     ]
+    display_unit = _choose_display_unit(descriptor.normalization_key, base_values)
+    display_factor = unit_scale[display_unit]
+    normalized: list[Reading] = []
+    for reading in readings:
+        if reading.value is None:
+            normalized.append(replace(reading, unit=display_unit))
+            continue
+        base_value = _base_unit_value(reading, descriptor.normalization_key)
+        if base_value is None:
+            normalized.append(replace(reading, unit=display_unit))
+            continue
+        normalized.append(replace(reading, value=base_value / display_factor, unit=display_unit))
+    return normalized
+
+
+def _base_unit_value(reading: Reading, normalization_key: str) -> float | None:
+    if reading.value is None:
+        return None
+    unit_scale = dict(_REPLAY_UNIT_SCALES.get(normalization_key, ()))
+    factor = unit_scale.get(reading.unit)
+    if factor is None:
+        return float(reading.value)
+    return float(reading.value) * factor
+
+
+def _choose_display_unit(normalization_key: str, base_values: list[float | None]) -> str:
+    units = _REPLAY_UNIT_SCALES[normalization_key]
+    numeric_values = [abs(value) for value in base_values if value is not None]
+    if not numeric_values:
+        return units[-1][0]
+    typical = median(numeric_values)
+    if typical == 0:
+        return units[-1][0]
+    for unit, factor in reversed(units):
+        if typical / factor >= 1:
+            return unit
+    return units[0][0]
 
 
 def _markers_for_context(readings: list[Reading], markers: list[SessionMarker], context_id: str) -> list[SessionMarker]:
@@ -962,11 +1142,11 @@ def _markers_for_context(readings: list[Reading], markers: list[SessionMarker], 
         return []
     selected: list[SessionMarker] = []
     reading_index = 0
-    current_context_id = _reading_context_id(readings[reading_index])
+    current_context_id = _replay_descriptor(readings[reading_index]).context_id
     for marker in markers:
         while reading_index + 1 < len(readings) and readings[reading_index + 1].timestamp_utc <= marker.timestamp_utc:
             reading_index += 1
-            current_context_id = _reading_context_id(readings[reading_index])
+            current_context_id = _replay_descriptor(readings[reading_index]).context_id
         if current_context_id == context_id:
             selected.append(marker)
     return selected

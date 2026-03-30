@@ -617,7 +617,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "active": active, "count": count, "summary": summary,
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
-            "context_filter": context_filter,
+            "context_filter": context_filter, "context_label": context_label,
             "export_csv": export_csv, "export_json": export_json,
             "export_chart": export_chart, "chart": chart,
         },
@@ -902,6 +902,9 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         [(None, "All Measurements")] + [(ctx.context_id, ctx.display_text) for ctx in session.available_contexts],
         session.selected_context_id,
     )
+    show_context_filter = bool(session.available_contexts)
+    panel.refs["context_filter"].setVisible(show_context_filter)
+    panel.refs["context_label"].setVisible(show_context_filter)
 
     panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
