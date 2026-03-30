@@ -11,7 +11,7 @@ from apps.cli._bootstrap import ensure_repo_paths
 ensure_repo_paths()
 
 from apps.cli import __version__
-from apps.cli.commands import debug, devices, fixtures, log, plugins, scan, sessions, stream, workflow
+from apps.cli.commands import alert, debug, devices, fixtures, log, plugins, scan, sessions, stream, watch, workflow
 from apps.cli.runtime import configure_logging
 
 
@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", dest="json", help="Output in JSON format where supported")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+    alert.register(subparsers)
     debug.register(subparsers)
     devices.register(subparsers)
     fixtures.register(subparsers)
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.register(subparsers)
     sessions.register(subparsers)
     stream.register(subparsers)
+    watch.register(subparsers)
     workflow.register(subparsers)
     return parser
 

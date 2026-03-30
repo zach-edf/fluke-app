@@ -78,12 +78,16 @@ class LiveReadingViewModel:
     measurement_label: str = "Idle"
     status_text: str = "Disconnected"
     connection_text: str = "Not connected"
+    is_connected: bool = False
+    connection_health: str = "idle"
     chart_notice_text: str = ""
     is_logging: bool = False
     session_title: str | None = None
     last_updated_text: str = "-"
     summary_text: str = "Min - | Max - | Avg -"
     marker_count_text: str = "0 markers"
+    alert_active: bool = False
+    alert_message: str = ""
     chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
 
@@ -97,6 +101,8 @@ class HomeViewModel:
     active_device_text: str = "No device connected"
     message_text: str = ""
     is_busy: bool = False
+    is_connected: bool = False
+    connection_health: str = "idle"
     recent_devices: tuple[RecentDeviceViewModel, ...] = ()
 
 
@@ -134,6 +140,7 @@ class SettingsViewModel:
     database_path_text: str = ""
     export_directory_text: str = ""
     diagnostics_text: str = ""
+    theme: str = "light"
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,6 +6,7 @@ from typing import Any, Protocol
 
 
 BleNotificationCallback = Callable[[bytes], Awaitable[None] | None]
+BleDisconnectCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,4 +59,12 @@ class BleAdapter(Protocol):
         ...
 
     async def services(self, device_id: str) -> list[BleServiceInfo]:
+        ...
+
+    def set_disconnect_callback(
+        self,
+        device_id: str,
+        callback: BleDisconnectCallback | None,
+    ) -> None:
+        """Register (or clear) a callback invoked when *device_id* disconnects unexpectedly."""
         ...

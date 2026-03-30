@@ -10,6 +10,7 @@ from fluke_ble.adapter import (
     BleAdapter,
     BleCharacteristicInfo,
     BleDevice,
+    BleDisconnectCallback,
     BleNotificationCallback,
     BleServiceInfo,
 )
@@ -18,6 +19,8 @@ from fluke_ble.adapter import (
 class BleakAdapter(BleAdapter):
     def __init__(self) -> None:
         self._clients: dict[str, BleakClient] = {}
+        self._disconnect_callbacks: dict[str, BleDisconnectCallback] = {}
+        self._deliberate_disconnect: set[str] = set()
 
     async def scan(self, timeout_s: float = 5.0) -> list[BleDevice]:
         try:
@@ -58,14 +61,27 @@ class BleakAdapter(BleAdapter):
         if client is not None and client.is_connected:
             return
 
-        client = BleakClient(device_id)
+        self._deliberate_disconnect.discard(device_id)
+
+        def _on_disconnected(_client: BleakClient) -> None:
+            self._clients.pop(device_id, None)
+            if device_id in self._deliberate_disconnect:
+                self._deliberate_disconnect.discard(device_id)
+                return
+            cb = self._disconnect_callbacks.get(device_id)
+            if cb is not None:
+                cb(device_id)
+
+        client = BleakClient(device_id, disconnected_callback=_on_disconnected)
         await client.connect()
         self._clients[device_id] = client
 
     async def disconnect(self, device_id: str) -> None:
+        self._deliberate_disconnect.add(device_id)
         client = self._clients.pop(device_id, None)
         if client is not None and client.is_connected:
             await client.disconnect()
+        self._disconnect_callbacks.pop(device_id, None)
 
     async def subscribe(
         self,
@@ -114,6 +130,16 @@ class BleakAdapter(BleAdapter):
             )
             for service in services
         ]
+
+    def set_disconnect_callback(
+        self,
+        device_id: str,
+        callback: BleDisconnectCallback | None,
+    ) -> None:
+        if callback is None:
+            self._disconnect_callbacks.pop(device_id, None)
+        else:
+            self._disconnect_callbacks[device_id] = callback
 
     def _require_client(self, device_id: str) -> BleakClient:
         client = self._clients.get(device_id)

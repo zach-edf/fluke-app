@@ -27,6 +27,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     con = sqlite3.connect(str(path), check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA journal_mode = WAL")
     return con
 
 

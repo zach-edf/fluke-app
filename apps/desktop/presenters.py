@@ -85,8 +85,12 @@ class AppPresenter:
         self._live_readings: list[Reading] = []
         self._live_context_key: tuple[str, str, str] | None = None
         self._chart_t0: datetime | None = None
+        self._last_reading_time: datetime | None = None
+        self._alert_high: float | None = None
+        self._alert_low: float | None = None
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
+        self._device_manager.subscribe_disconnects(self._on_device_disconnected)
         self.refresh_recent_devices()
         self.refresh_recent_sessions()
         self.refresh_workflows()
@@ -223,6 +227,22 @@ class AppPresenter:
             self.refresh_workflows()
         finally:
             self._set_home_busy(False)
+
+    def _on_device_disconnected(self) -> None:
+        """Called when the BLE device disconnects unexpectedly (e.g. powered off)."""
+        if self._workflow_runner.active_state() is not None:
+            self._workflow_runner.cancel()
+            self._workflow_owned_session_id = None
+            self._workflow_status_message = "Workflow cancelled — device disconnected unexpectedly."
+        if self._recorder.active_session() is not None:
+            self.stop_logging()
+        self._set_disconnected_state(
+            connection_text="Device disconnected unexpectedly",
+            live_status_text="Disconnected",
+            discovery_status_text="Device lost",
+            diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
+        )
+        self.refresh_workflows()
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -597,6 +617,7 @@ class AppPresenter:
         timestamp = reading.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
         context_key = _reading_context_key(reading)
         banner_text = ""
+        self._last_reading_time = datetime.now(timezone.utc)
         with self._lock:
             if self._live_context_key is not None and context_key != self._live_context_key:
                 self._reset_live_chart_state(reading.timestamp_utc)
@@ -618,6 +639,7 @@ class AppPresenter:
                 unit_text=reading.unit,
                 measurement_label=reading.measurement_type.value.replace("_", " ").title(),
                 status_text=reading.status.value.replace("_", " ").title(),
+                connection_health="streaming",
                 session_title=session_title,
                 chart_notice_text=banner_text or self._live.chart_notice_text,
                 is_logging=is_logging,
@@ -627,12 +649,47 @@ class AppPresenter:
                 chart_points=tuple(self._live_points),
                 marker_points=tuple(self._live_marker_points),
             )
+            # Alert threshold check
+            alert_active = False
+            alert_message = ""
+            if reading.value is not None:
+                if self._alert_high is not None and reading.value > self._alert_high:
+                    alert_active = True
+                    alert_message = f"HIGH ALERT: {reading.value:.4g} {reading.unit} exceeds {self._alert_high:.4g}"
+                elif self._alert_low is not None and reading.value < self._alert_low:
+                    alert_active = True
+                    alert_message = f"LOW ALERT: {reading.value:.4g} {reading.unit} below {self._alert_low:.4g}"
+            self._live = replace(self._live, alert_active=alert_active, alert_message=alert_message)
             self._session = replace(
                 self._session,
                 reading_count_text=f"{self._recorder.reading_count()} readings",
             )
             if self._workflow.is_running:
                 self._workflow = replace(self._workflow, latest_capture_text=f"Latest live reading: {reading.display_text}")
+
+    def set_alert_thresholds(self, low: float | None, high: float | None) -> None:
+        """Set (or clear) value-based alert thresholds."""
+        self._alert_high = high
+        self._alert_low = low
+        with self._lock:
+            self._live = replace(self._live, alert_active=False, alert_message="")
+
+    def check_reading_freshness(self) -> None:
+        """Update the stale-data warning if no reading has arrived recently."""
+        with self._lock:
+            if not self._live.is_connected or self._live.connection_health != "streaming":
+                return
+            if self._last_reading_time is None:
+                return
+            elapsed = (datetime.now(timezone.utc) - self._last_reading_time).total_seconds()
+            if elapsed > 5.0:
+                stale_text = f"No reading received for {int(elapsed)}s. Device may be unresponsive."
+                self._live = replace(
+                    self._live,
+                    chart_notice_text=stale_text,
+                    connection_health="connected",
+                )
+                self._home = replace(self._home, connection_health="connected")
 
     def _resolve_export_session_id(self, session_id: str | None) -> str:
         target = session_id or self._last_completed_session_id
@@ -672,11 +729,15 @@ class AppPresenter:
                 connection_text=f"Connected to {label}",
                 active_device_text=f"{label} ({device.device_id})",
                 message_text=f"Connected to {label}. Starting live stream...",
+                is_connected=True,
+                connection_health="connected",
             )
             self._live = replace(
                 self._live,
                 connection_text=f"Connected to {label}",
                 status_text="Starting stream...",
+                is_connected=True,
+                connection_health="connected",
                 chart_points=(),
                 marker_points=(),
                 chart_notice_text="",
@@ -708,13 +769,21 @@ class AppPresenter:
                 self._home,
                 connection_text=connection_text,
                 active_device_text="No device connected",
+                is_connected=False,
+                connection_health="disconnected",
             )
             self._live = replace(
                 self._live,
+                main_value="--",
+                unit_text="",
+                measurement_label="Idle",
                 connection_text=connection_text,
                 status_text=live_status_text,
+                is_connected=False,
+                connection_health="disconnected",
                 is_logging=False,
                 session_title=None,
+                last_updated_text="-",
                 chart_points=(),
                 marker_points=(),
                 chart_notice_text="",
@@ -770,6 +839,7 @@ class AppPresenter:
         self._live_points.clear()
         self._live_marker_points.clear()
         self._live_readings = []
+        self._last_reading_time = None
 
     def _finish_workflow_if_complete(self, state: WorkflowRunState) -> None:
         if state.run.result != WorkflowRunResult.COMPLETED:

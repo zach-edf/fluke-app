@@ -28,6 +28,7 @@ class DeviceManager:
         self._active_profile: DeviceProfile | None = None
         self._scanned_devices: dict[str, DeviceInfo] = {}
         self._reading_handlers: list[Callable[[Reading], None]] = []
+        self._disconnect_handlers: list[Callable[[], None]] = []
         self._subscribed_characteristics: set[str] = set()
         self._last_device_id: str | None = None
         self._last_profile_id: str | None = None
@@ -50,6 +51,7 @@ class DeviceManager:
             device = self._scanned_devices.get(device_id)
             profile = self._resolve_profile(device, profile_id)
             await self._ble.connect(device_id)
+            self._ble.set_disconnect_callback(device_id, self._on_unexpected_disconnect)
 
             if device is None:
                 device = DeviceInfo(
@@ -116,18 +118,21 @@ class DeviceManager:
             self._state = ConnectionState.IDLE
             return
 
+        device_id = self._active_device_id
+        self._ble.set_disconnect_callback(device_id, None)
+
         for characteristic_uuid in list(self._subscribed_characteristics):
             try:
-                await self._ble.unsubscribe(self._active_device_id, characteristic_uuid)
+                await self._ble.unsubscribe(device_id, characteristic_uuid)
             except Exception:
                 pass
         self._subscribed_characteristics.clear()
 
         if self._active_profile is not None:
-            self._active_profile.reset_device(self._active_device_id)
+            self._active_profile.reset_device(device_id)
 
         try:
-            await self._ble.disconnect(self._active_device_id)
+            await self._ble.disconnect(device_id)
         finally:
             self._active_device_id = None
             self._active_device = None
@@ -148,6 +153,27 @@ class DeviceManager:
 
     def subscribe_readings(self, handler: Callable[[Reading], None]) -> None:
         self._reading_handlers.append(handler)
+
+    def subscribe_disconnects(self, handler: Callable[[], None]) -> None:
+        """Register a handler called when the device disconnects unexpectedly."""
+        self._disconnect_handlers.append(handler)
+
+    def _on_unexpected_disconnect(self, device_id: str) -> None:
+        """Called by the BLE adapter when the remote device drops the connection."""
+        if device_id != self._active_device_id:
+            return
+        self._subscribed_characteristics.clear()
+        if self._active_profile is not None:
+            self._active_profile.reset_device(device_id)
+        self._active_device_id = None
+        self._active_device = None
+        self._active_profile = None
+        self._state = ConnectionState.DISCONNECTED
+        for handler in list(self._disconnect_handlers):
+            try:
+                handler()
+            except Exception:
+                pass
 
     def _to_device_info(self, device: BleDevice) -> DeviceInfo:
         profile = self._profiles.resolve(device.name, device.metadata)

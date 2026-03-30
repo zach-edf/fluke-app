@@ -5,6 +5,7 @@ from pathlib import Path
 
 from apps.desktop._qt import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -183,6 +184,22 @@ def create_main_window(runtime) -> QWidget:
             self._tabs.addTab(self._workflow.panel, "Workflows")
             self._tabs.addTab(self._settings.panel, "Settings")
             outer.addWidget(self._tabs)
+
+            # Persistent status bar
+            status_bar = QWidget()
+            status_bar.setObjectName("status_bar")
+            status_row = QHBoxLayout(status_bar)
+            status_row.setContentsMargins(10, 4, 10, 4)
+            self._sb_connection = QLabel("Disconnected")
+            self._sb_session = QLabel("No active session")
+            self._sb_reading = QLabel("Last reading: -")
+            for lbl in (self._sb_connection, self._sb_session, self._sb_reading):
+                lbl.setStyleSheet("font-size: 11px; color: #4b5b57;")
+            status_row.addWidget(self._sb_connection, 1)
+            status_row.addWidget(self._sb_session, 1)
+            status_row.addWidget(self._sb_reading, 1)
+            outer.addWidget(status_bar)
+
             self.setCentralWidget(root)
 
             # Keyboard shortcuts
@@ -215,6 +232,11 @@ def create_main_window(runtime) -> QWidget:
             self._refresh()
 
         def closeEvent(self, event) -> None:  # type: ignore[override]
+            self._refresh_timer.stop()
+            try:
+                _submit(runtime, runtime.presenter.disconnect_device())
+            except Exception:
+                pass
             super().closeEvent(event)
 
         def _refresh(self) -> None:
@@ -224,6 +246,12 @@ def create_main_window(runtime) -> QWidget:
             _refresh_session(runtime, self._session)
             _refresh_workflow(runtime, self._workflow)
             _refresh_settings(runtime, self._settings)
+            # Status bar
+            home = runtime.presenter.home_view_model()
+            live = runtime.presenter.live_view_model()
+            self._sb_connection.setText(home.connection_text)
+            self._sb_session.setText(home.active_session_text)
+            self._sb_reading.setText(f"Last reading: {live.last_updated_text}")
 
     return MainWindow()
 
@@ -237,7 +265,14 @@ def _home_panel(window: QWidget, runtime) -> _PanelRefs:
     layout = QVBoxLayout(panel)
     title = QLabel()
     subtitle = QLabel()
+    connection_dot = QLabel("\u2B24")
+    connection_dot.setFixedWidth(18)
+    connection_dot.setStyleSheet("color: #a0afa8; font-size: 11px;")
     connection = QLabel()
+    connection_row = QHBoxLayout()
+    connection_row.setContentsMargins(0, 0, 0, 0)
+    connection_row.addWidget(connection_dot)
+    connection_row.addWidget(connection, 1)
     device = QLabel()
     session = QLabel()
     message = QLabel()
@@ -254,7 +289,10 @@ def _home_panel(window: QWidget, runtime) -> _PanelRefs:
     scan_button.clicked.connect(lambda: _submit(runtime, runtime.presenter.scan_devices(timeout_s=5.0)))
     reconnect_button.clicked.connect(lambda: _submit(runtime, runtime.presenter.reconnect_last_device()))
 
-    for widget in (title, subtitle, connection, device, session, message, recent_devices):
+    for widget in (title, subtitle):
+        layout.addWidget(widget)
+    layout.addLayout(connection_row)
+    for widget in (device, session, message, recent_devices):
         layout.addWidget(widget)
     btn_row = QHBoxLayout()
     btn_row.addWidget(scan_button)
@@ -265,7 +303,8 @@ def _home_panel(window: QWidget, runtime) -> _PanelRefs:
     return _PanelRefs(
         panel=panel,
         refs={
-            "title": title, "subtitle": subtitle, "connection": connection,
+            "title": title, "subtitle": subtitle,
+            "connection_dot": connection_dot, "connection": connection,
             "device": device, "session": session, "message": message,
             "recent_devices": recent_devices,
             "scan_button": scan_button, "reconnect_button": reconnect_button,
@@ -329,7 +368,14 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     unit = QLabel()
     measurement = QLabel()
     status = QLabel()
+    connection_dot = QLabel("\u2B24")
+    connection_dot.setFixedWidth(18)
+    connection_dot.setStyleSheet("color: #a0afa8; font-size: 11px;")
     connection = QLabel()
+    connection_row = QHBoxLayout()
+    connection_row.setContentsMargins(0, 0, 0, 0)
+    connection_row.addWidget(connection_dot)
+    connection_row.addWidget(connection, 1)
     chart_notice = QLabel()
     chart_notice.setObjectName("notice_banner")
     chart_notice.setWordWrap(True)
@@ -345,6 +391,37 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     title_input = QLineEdit()
     notes_input = QTextEdit()
     notes_input.setFixedHeight(80)
+    alert_banner = QLabel()
+    alert_banner.setObjectName("alert_banner")
+    alert_banner.setWordWrap(True)
+    alert_banner.hide()
+    alert_low_input = QLineEdit()
+    alert_low_input.setPlaceholderText("Low threshold")
+    alert_low_input.setFixedWidth(120)
+    alert_high_input = QLineEdit()
+    alert_high_input.setPlaceholderText("High threshold")
+    alert_high_input.setFixedWidth(120)
+    alert_apply_button = QPushButton("Set Alerts")
+    alert_apply_button.setToolTip("Set value alert thresholds (leave blank to disable)")
+    alert_clear_button = QPushButton("Clear")
+    alert_clear_button.setToolTip("Remove all alert thresholds")
+
+    def _apply_alerts() -> None:
+        low_text = alert_low_input.text().strip()
+        high_text = alert_high_input.text().strip()
+        low = float(low_text) if low_text else None
+        high = float(high_text) if high_text else None
+        runtime.presenter.set_alert_thresholds(low, high)
+
+    alert_apply_button.clicked.connect(lambda: _safe_call(runtime, _apply_alerts))
+    alert_clear_button.clicked.connect(
+        lambda: _safe_call(runtime, lambda: (
+            runtime.presenter.set_alert_thresholds(None, None),
+            alert_low_input.clear(),
+            alert_high_input.clear(),
+        ))
+    )
+
     marker_input = QLineEdit()
     marker_input.setPlaceholderText("Add a marker note during logging")
 
@@ -391,13 +468,26 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     action_row.addWidget(export_chart_button)
     action_row.addWidget(disconnect_button)
 
+    alert_row = QHBoxLayout()
+    alert_row.addWidget(QLabel("Low:"))
+    alert_row.addWidget(alert_low_input)
+    alert_row.addWidget(QLabel("High:"))
+    alert_row.addWidget(alert_high_input)
+    alert_row.addWidget(alert_apply_button)
+    alert_row.addWidget(alert_clear_button)
+    alert_row.addStretch()
+
     marker_row = QHBoxLayout()
     marker_row.addWidget(marker_input, 1)
     marker_row.addWidget(add_marker_button)
 
-    for widget in (value, unit, measurement, status, connection, chart_notice, session, last_updated, summary, marker_count):
+    for widget in (value, unit, measurement, status):
+        layout.addWidget(widget)
+    layout.addLayout(connection_row)
+    for widget in (chart_notice, alert_banner, session, last_updated, summary, marker_count):
         layout.addWidget(widget)
     layout.addWidget(chart.widget)
+    layout.addLayout(alert_row)
     layout.addLayout(form)
     layout.addLayout(marker_row)
     layout.addLayout(action_row)
@@ -406,13 +496,15 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
         panel=panel,
         refs={
             "value": value, "unit": unit, "measurement": measurement,
-            "status": status, "connection": connection, "chart_notice": chart_notice, "session": session,
+            "status": status, "connection_dot": connection_dot, "connection": connection,
+            "chart_notice": chart_notice, "alert_banner": alert_banner, "session": session,
             "last_updated": last_updated, "summary": summary,
             "marker_count": marker_count, "title_input": title_input,
             "marker_input": marker_input,
             "start_button": start_button, "stop_button": stop_button,
             "add_marker_button": add_marker_button,
             "export_chart_button": export_chart_button,
+            "disconnect_button": disconnect_button,
             "chart": chart,
         },
     )
@@ -548,13 +640,34 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
         lambda: _safe_call(runtime, lambda: runtime.presenter.set_export_directory(export_dir_input.text()))
     )
 
+    theme_combo = QComboBox()
+    theme_combo.addItem("Light", "light")
+    theme_combo.addItem("Dark", "dark")
+    theme_combo.setToolTip("Switch between light and dark UI themes")
+
+    def _on_theme_changed(index: int) -> None:
+        from apps.desktop.theme import STYLESHEET, DARK_STYLESHEET
+        theme_id = theme_combo.itemData(index)
+        app_instance = QApplication.instance()
+        if app_instance is not None:
+            app_instance.setStyleSheet(DARK_STYLESHEET if theme_id == "dark" else STYLESHEET)
+
+    theme_combo.currentIndexChanged.connect(_on_theme_changed)
+
+    theme_form = QFormLayout()
+    theme_form.addRow("Theme", theme_combo)
+
     for widget in (database, diagnostics, export_dir_input, apply_button):
         layout.addWidget(widget)
+    layout.addLayout(theme_form)
     layout.addStretch()
 
     return _PanelRefs(
         panel=panel,
-        refs={"database": database, "diagnostics": diagnostics, "export_dir_input": export_dir_input},
+        refs={
+            "database": database, "diagnostics": diagnostics,
+            "export_dir_input": export_dir_input, "theme_combo": theme_combo,
+        },
     )
 
 
@@ -659,6 +772,24 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
 
 
 # ---------------------------------------------------------------------------
+# Connection dot colors
+# ---------------------------------------------------------------------------
+
+_HEALTH_COLORS = {
+    "streaming": "#0b7a6b",
+    "connected": "#ce6a06",
+    "disconnected": "#a83232",
+    "error": "#a83232",
+    "idle": "#a0afa8",
+}
+
+
+def _update_connection_dot(dot_label, health: str) -> None:
+    color = _HEALTH_COLORS.get(health, "#a0afa8")
+    dot_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+
+# ---------------------------------------------------------------------------
 # Refresh functions
 # ---------------------------------------------------------------------------
 
@@ -667,6 +798,7 @@ def _refresh_home(runtime, panel: _PanelRefs) -> None:
     panel.refs["title"].setText(home.title)
     panel.refs["subtitle"].setText(home.subtitle)
     panel.refs["connection"].setText(f"Connection: {home.connection_text}")
+    _update_connection_dot(panel.refs["connection_dot"], home.connection_health)
     panel.refs["device"].setText(f"Device: {home.active_device_text}")
     panel.refs["session"].setText(f"Session: {home.active_session_text}")
     panel.refs["message"].setText(home.message_text)
@@ -675,8 +807,8 @@ def _refresh_home(runtime, panel: _PanelRefs) -> None:
         [(d.device_id, [d.label, d.support_text, d.last_seen_text]) for d in home.recent_devices],
     )
     is_busy = getattr(home, "is_busy", False)
-    panel.refs["scan_button"].setEnabled(not is_busy)
-    panel.refs["reconnect_button"].setEnabled(not is_busy)
+    panel.refs["scan_button"].setEnabled(not is_busy and not home.is_connected)
+    panel.refs["reconnect_button"].setEnabled(not is_busy and not home.is_connected)
 
 
 def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
@@ -703,12 +835,14 @@ def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
 
 
 def _refresh_live(runtime, panel: _PanelRefs) -> None:
+    runtime.presenter.check_reading_freshness()
     live = runtime.presenter.live_view_model()
     panel.refs["value"].setText(live.main_value)
     panel.refs["unit"].setText(live.unit_text)
     panel.refs["measurement"].setText(live.measurement_label)
     panel.refs["status"].setText(f"Status: {live.status_text}")
     panel.refs["connection"].setText(f"Connection: {live.connection_text}")
+    _update_connection_dot(panel.refs["connection_dot"], live.connection_health)
     chart_notice = panel.refs["chart_notice"]
     chart_notice.setText(live.chart_notice_text)
     chart_notice.setVisible(bool(live.chart_notice_text))
@@ -716,11 +850,15 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["last_updated"].setText(f"Last Update: {live.last_updated_text}")
     panel.refs["summary"].setText(live.summary_text)
     panel.refs["marker_count"].setText(live.marker_count_text)
-    panel.refs["start_button"].setEnabled(not live.is_logging)
+    panel.refs["start_button"].setEnabled(live.is_connected and not live.is_logging)
     panel.refs["stop_button"].setEnabled(live.is_logging)
     panel.refs["add_marker_button"].setEnabled(live.is_logging)
     panel.refs["marker_input"].setEnabled(live.is_logging)
     panel.refs["export_chart_button"].setEnabled(bool(live.chart_points))
+    panel.refs["disconnect_button"].setEnabled(live.is_connected)
+    alert_banner = panel.refs["alert_banner"]
+    alert_banner.setText(live.alert_message)
+    alert_banner.setVisible(live.alert_active)
     panel.refs["chart"].set_data(
         live.chart_points, live.marker_points,
         unit_text=live.unit_text, measurement_label=live.measurement_label,

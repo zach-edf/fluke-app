@@ -8,6 +8,7 @@ from fluke_ble.adapter import (
     BleAdapter,
     BleCharacteristicInfo,
     BleDevice,
+    BleDisconnectCallback,
     BleNotificationCallback,
     BleServiceInfo,
 )
@@ -35,6 +36,7 @@ class FakeBleAdapter(BleAdapter):
         self._services_by_device = services_by_device or {}
         self._connected: set[str] = set()
         self._subscriptions: dict[tuple[str, str], _Subscription] = {}
+        self._disconnect_callbacks: dict[str, BleDisconnectCallback] = {}
         self.read_log: list[tuple[str, str]] = []
         self.write_log: list[tuple[str, str, bytes]] = []
 
@@ -50,6 +52,7 @@ class FakeBleAdapter(BleAdapter):
         self._subscriptions = {
             key: sub for key, sub in self._subscriptions.items() if key[0] != device_id
         }
+        self._disconnect_callbacks.pop(device_id, None)
 
     async def subscribe(
         self,
@@ -98,6 +101,26 @@ class FakeBleAdapter(BleAdapter):
     @property
     def subscription_keys(self) -> tuple[tuple[str, str], ...]:
         return tuple(self._subscriptions.keys())
+
+    def set_disconnect_callback(
+        self,
+        device_id: str,
+        callback: BleDisconnectCallback | None,
+    ) -> None:
+        if callback is None:
+            self._disconnect_callbacks.pop(device_id, None)
+        else:
+            self._disconnect_callbacks[device_id] = callback
+
+    async def simulate_unexpected_disconnect(self, device_id: str) -> None:
+        """Simulate the device powering off or going out of range."""
+        self._connected.discard(device_id)
+        self._subscriptions = {
+            key: sub for key, sub in self._subscriptions.items() if key[0] != device_id
+        }
+        cb = self._disconnect_callbacks.get(device_id)
+        if cb is not None:
+            cb(device_id)
 
     def _require_connected(self, device_id: str) -> None:
         if device_id not in self._connected:

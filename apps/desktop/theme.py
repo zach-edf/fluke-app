@@ -181,4 +181,232 @@ QLabel[objectName="status_ok"] {
 QLabel[objectName="status_error"] {
     color: #a83232;
 }
+QLabel[objectName="alert_banner"] {
+    background: #fff3e0;
+    color: #a83232;
+    border: 1px solid #e06060;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+/* ── Status Bar ──────────────────────────────────────── */
+QWidget[objectName="status_bar"] {
+    background: #f0f2f1;
+    border-top: 1px solid #d6dfdb;
+}
+"""
+
+DARK_STYLESHEET = """
+/* ── Global ───────────────────────────────────────────── */
+QMainWindow, QWidget {
+    font-size: 13px;
+    background: #1a2b26;
+    color: #d0e0dc;
+}
+
+/* ── Buttons ──────────────────────────────────────────── */
+QPushButton {
+    padding: 7px 18px;
+    border: 1px solid #3a4f48;
+    border-radius: 5px;
+    background: #253b35;
+    color: #d0e0dc;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background: #2f4a42;
+    border-color: #0b7a6b;
+}
+QPushButton:pressed {
+    background: #0b7a6b;
+    color: white;
+    border-color: #099485;
+}
+QPushButton:disabled {
+    background: #1e302b;
+    color: #4b5b57;
+    border-color: #2a3d37;
+}
+
+QPushButton[objectName="primary_button"] {
+    background: #0b7a6b;
+    color: white;
+    border-color: #099485;
+    font-weight: 600;
+}
+QPushButton[objectName="primary_button"]:hover {
+    background: #099485;
+}
+QPushButton[objectName="primary_button"]:pressed {
+    background: #0bbda8;
+}
+QPushButton[objectName="primary_button"]:disabled {
+    background: #253b35;
+    color: #4b5b57;
+    border-color: #253b35;
+}
+
+QPushButton[objectName="danger_button"] {
+    color: #e06060;
+    border-color: #5a2828;
+}
+QPushButton[objectName="danger_button"]:hover {
+    background: #3a1e1e;
+    border-color: #e06060;
+}
+QPushButton[objectName="danger_button"]:pressed {
+    background: #a83232;
+    color: white;
+}
+
+/* ── Tabs ─────────────────────────────────────────────── */
+QTabWidget::pane {
+    border: 1px solid #2a3d37;
+    border-top: 2px solid #0b7a6b;
+    background: #1a2b26;
+}
+QTabBar::tab {
+    padding: 8px 20px;
+    margin-right: 2px;
+    border: 1px solid #2a3d37;
+    border-bottom: none;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    background: #1e302b;
+    color: #8a9e98;
+}
+QTabBar::tab:selected {
+    background: #1a2b26;
+    color: #0bbda8;
+    font-weight: 600;
+    border-color: #2a3d37;
+}
+QTabBar::tab:hover:!selected {
+    background: #253b35;
+}
+
+/* ── Tables ───────────────────────────────────────────── */
+QTableWidget {
+    border: 1px solid #2a3d37;
+    border-radius: 4px;
+    gridline-color: #253b35;
+    background: #1a2b26;
+    alternate-background-color: #1e302b;
+    selection-background-color: #0b7a6b;
+    selection-color: white;
+}
+QTableWidget::item {
+    padding: 4px 8px;
+}
+QHeaderView::section {
+    background: #253b35;
+    color: #8a9e98;
+    font-weight: 600;
+    padding: 6px 8px;
+    border: none;
+    border-right: 1px solid #2a3d37;
+    border-bottom: 1px solid #2a3d37;
+}
+
+/* ── List Widgets ─────────────────────────────────────── */
+QListWidget {
+    border: 1px solid #2a3d37;
+    border-radius: 4px;
+    background: #1a2b26;
+    selection-background-color: #0b7a6b;
+    selection-color: white;
+}
+QListWidget::item {
+    padding: 4px 8px;
+}
+
+/* ── Text Inputs ──────────────────────────────────────── */
+QLineEdit, QTextEdit, QComboBox {
+    border: 1px solid #3a4f48;
+    border-radius: 4px;
+    padding: 5px 8px;
+    background: #253b35;
+    color: #d0e0dc;
+}
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
+    border-color: #0b7a6b;
+    outline: none;
+}
+QLineEdit:disabled, QTextEdit:disabled, QComboBox:disabled {
+    background: #1e302b;
+    color: #4b5b57;
+}
+QComboBox::drop-down {
+    border: none;
+    padding-right: 6px;
+}
+QComboBox QAbstractItemView {
+    background: #253b35;
+    color: #d0e0dc;
+    selection-background-color: #0b7a6b;
+    selection-color: white;
+}
+
+/* ── Labels ───────────────────────────────────────────── */
+QLabel {
+    color: #d0e0dc;
+}
+QLabel[objectName="section_header"] {
+    font-weight: 600;
+    font-size: 14px;
+    color: #0bbda8;
+    padding-top: 4px;
+    padding-bottom: 2px;
+}
+QLabel[objectName="big_reading"] {
+    font-size: 42px;
+    font-weight: 700;
+    color: #0bbda8;
+}
+QLabel[objectName="notice_banner"] {
+    background: #253b35;
+    color: #0bbda8;
+    border: 1px solid #3a4f48;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-weight: 500;
+}
+QLabel[objectName="status_ok"] {
+    color: #0bbda8;
+}
+QLabel[objectName="status_error"] {
+    color: #e06060;
+}
+QLabel[objectName="alert_banner"] {
+    background: #3a1e1e;
+    color: #ff6b6b;
+    border: 1px solid #5a2828;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+/* ── Scroll Bars ─────────────────────────────────────── */
+QScrollBar:vertical {
+    background: #1a2b26;
+    width: 10px;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: #3a4f48;
+    min-height: 20px;
+    border-radius: 4px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* ── Status Bar ──────────────────────────────────────── */
+QWidget[objectName="status_bar"] {
+    background: #152220;
+    border-top: 1px solid #2a3d37;
+}
 """
