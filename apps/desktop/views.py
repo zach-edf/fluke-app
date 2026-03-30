@@ -5,6 +5,7 @@ from pathlib import Path
 
 from apps.desktop._qt import (
     QAbstractItemView,
+    QComboBox,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -102,6 +103,25 @@ def _sync_list_rows(list_widget, item_cls, rows: list[tuple[object, str]]) -> No
         item = item_cls(label)
         item.setData(0x0100, row_id)
         list_widget.addItem(item)
+
+
+def _sync_combo_rows(combo: QComboBox, rows: list[tuple[object, str]], selected_id: object | None) -> None:
+    """Sync a combo box from a list of (row_id, label) tuples."""
+    current_rows = [(combo.itemData(index), combo.itemText(index)) for index in range(combo.count())]
+    if current_rows == rows and combo.currentData() == selected_id:
+        return
+
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        selected_index = 0
+        for index, (row_id, label) in enumerate(rows):
+            combo.addItem(label, row_id)
+            if row_id == selected_id:
+                selected_index = index
+        combo.setCurrentIndex(selected_index if rows else -1)
+    finally:
+        combo.blockSignals(False)
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +330,10 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     measurement = QLabel()
     status = QLabel()
     connection = QLabel()
+    chart_notice = QLabel()
+    chart_notice.setObjectName("notice_banner")
+    chart_notice.setWordWrap(True)
+    chart_notice.hide()
     last_updated = QLabel()
     session = QLabel()
     summary = QLabel()
@@ -371,7 +395,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     marker_row.addWidget(marker_input, 1)
     marker_row.addWidget(add_marker_button)
 
-    for widget in (value, unit, measurement, status, connection, session, last_updated, summary, marker_count):
+    for widget in (value, unit, measurement, status, connection, chart_notice, session, last_updated, summary, marker_count):
         layout.addWidget(widget)
     layout.addWidget(chart.widget)
     layout.addLayout(form)
@@ -382,7 +406,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
         panel=panel,
         refs={
             "value": value, "unit": unit, "measurement": measurement,
-            "status": status, "connection": connection, "session": session,
+            "status": status, "connection": connection, "chart_notice": chart_notice, "session": session,
             "last_updated": last_updated, "summary": summary,
             "marker_count": marker_count, "title_input": title_input,
             "marker_input": marker_input,
@@ -404,6 +428,8 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     database.setWordWrap(True)
     export_status = QLabel()
     export_status.setWordWrap(True)
+    context_filter = QComboBox()
+    context_filter.setToolTip("Filter replay chart and summary by measurement context")
 
     recent = _make_table(["Title", "Started", "Ended"], min_height=150)
     markers_table = _make_table(["Time", "Label", "Note"], min_height=100)
@@ -427,6 +453,9 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
         if selected_id is None:
             return
         _safe_call(runtime, lambda: runtime.presenter.select_session(selected_id))
+
+    def on_context_changed() -> None:
+        _safe_call(runtime, lambda: runtime.presenter.select_session_context(context_filter.currentData()))
 
     export_csv.clicked.connect(
         lambda: _export_and_notify(
@@ -452,6 +481,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
         lambda: _export_chart_with_dialog(window, runtime, chart, _session_chart_export_path(runtime))
     )
     recent.itemSelectionChanged.connect(on_selection_changed)
+    context_filter.currentIndexChanged.connect(on_context_changed)
 
     session_list_column = QVBoxLayout()
     header = QLabel("Recent Sessions")
@@ -460,8 +490,15 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     session_list_column.addWidget(recent)
 
     detail_column = QVBoxLayout()
-    for widget in (active, count, summary, database, export_status, chart.widget):
+    for widget in (active, count, summary, database, export_status):
         detail_column.addWidget(widget)
+    context_row = QHBoxLayout()
+    context_label = QLabel("Measurement View")
+    context_label.setObjectName("section_header")
+    context_row.addWidget(context_label)
+    context_row.addWidget(context_filter, 1)
+    detail_column.addLayout(context_row)
+    detail_column.addWidget(chart.widget)
     notes_header = QLabel("Session Notes")
     notes_header.setObjectName("section_header")
     detail_column.addWidget(notes_header)
@@ -488,6 +525,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "active": active, "count": count, "summary": summary,
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
+            "context_filter": context_filter,
             "export_csv": export_csv, "export_json": export_json,
             "export_chart": export_chart, "chart": chart,
         },
@@ -671,6 +709,9 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["measurement"].setText(live.measurement_label)
     panel.refs["status"].setText(f"Status: {live.status_text}")
     panel.refs["connection"].setText(f"Connection: {live.connection_text}")
+    chart_notice = panel.refs["chart_notice"]
+    chart_notice.setText(live.chart_notice_text)
+    chart_notice.setVisible(bool(live.chart_notice_text))
     panel.refs["session"].setText(f"Session: {live.session_title or 'No active session'}")
     panel.refs["last_updated"].setText(f"Last Update: {live.last_updated_text}")
     panel.refs["summary"].setText(live.summary_text)
@@ -718,13 +759,18 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         panel.refs["markers_table"],
         [(m.marker_id, [m.timestamp_text, m.label, m.note]) for m in session.selected_markers],
     )
+    _sync_combo_rows(
+        panel.refs["context_filter"],
+        [(None, "All Measurements")] + [(ctx.context_id, ctx.display_text) for ctx in session.available_contexts],
+        session.selected_context_id,
+    )
 
     panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_chart"].setEnabled(bool(session.chart_points))
     panel.refs["chart"].set_data(
         session.chart_points, session.marker_points,
-        unit_text=session.selected_unit_text, measurement_label="Session Replay",
+        unit_text=session.selected_unit_text, measurement_label=session.selected_context_label or "Session Replay",
     )
 
 

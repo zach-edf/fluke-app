@@ -131,20 +131,24 @@ QListWidget::item {
 }
 
 /* ── Text Inputs ──────────────────────────────────────── */
-QLineEdit, QTextEdit {
+QLineEdit, QTextEdit, QComboBox {
     border: 1px solid #d6dfdb;
     border-radius: 4px;
     padding: 5px 8px;
     background: white;
     color: #1a2b26;
 }
-QLineEdit:focus, QTextEdit:focus {
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
     border-color: #0b7a6b;
     outline: none;
 }
-QLineEdit:disabled, QTextEdit:disabled {
+QLineEdit:disabled, QTextEdit:disabled, QComboBox:disabled {
     background: #f0f2f1;
     color: #a0afa8;
+}
+QComboBox::drop-down {
+    border: none;
+    padding-right: 6px;
 }
 
 /* ── Labels ───────────────────────────────────────────── */
@@ -162,6 +166,14 @@ QLabel[objectName="big_reading"] {
     font-size: 42px;
     font-weight: 700;
     color: #0b7a6b;
+}
+QLabel[objectName="notice_banner"] {
+    background: #e8efec;
+    color: #0b7a6b;
+    border: 1px solid #b9d2cb;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-weight: 500;
 }
 QLabel[objectName="status_ok"] {
     color: #0b7a6b;

@@ -11,6 +11,7 @@ try:
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
+        QComboBox,
         QFormLayout,
         QHBoxLayout,
         QHeaderView,
@@ -41,6 +42,7 @@ __all__ = [
     "QShortcut",
     "QAbstractItemView",
     "QApplication",
+    "QComboBox",
     "QFormLayout",
     "QHBoxLayout",
     "QHeaderView",

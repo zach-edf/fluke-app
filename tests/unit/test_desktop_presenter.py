@@ -199,6 +199,123 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
+    async def test_presenter_resets_live_chart_when_measurement_context_changes(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-context.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-context",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:22",
+                    rssi=-48,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-context")
+
+            voltage_reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("12.34 V", "dc")),
+                )
+            )
+            await voltage_reading.run(adapter, "meter-context")
+            first_live = presenter.live_view_model()
+            self.assertIn("Voltage", first_live.measurement_label)
+            self.assertEqual(first_live.unit_text, "V")
+            self.assertEqual(len(first_live.chart_points), 1)
+            self.assertEqual(first_live.chart_notice_text, "")
+            self.assertIn("Samples 1", first_live.summary_text)
+
+            current_reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.25 A", "ac")),
+                )
+            )
+            await current_reading.run(adapter, "meter-context")
+            second_live = presenter.live_view_model()
+            self.assertIn("Current", second_live.measurement_label)
+            self.assertEqual(second_live.unit_text, "A")
+            self.assertEqual(len(second_live.chart_points), 1)
+            self.assertIn("chart reset", second_live.chart_notice_text.lower())
+            self.assertIn("Current", second_live.chart_notice_text)
+            self.assertIn("Samples 1", second_live.summary_text)
+        finally:
+            store.close()
+
+    async def test_presenter_filters_session_replay_by_measurement_context(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-session-filter.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-session-filter",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:33",
+                    rssi=-47,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-session-filter")
+            session_id = presenter.start_logging(title="Mixed Session")
+
+            voltage_reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("12.34 V", "dc")),
+                )
+            )
+            await voltage_reading.run(adapter, "meter-session-filter")
+            presenter.add_marker("Voltage capture", label="note")
+
+            current_reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.25 A", "ac")),
+                )
+            )
+            await current_reading.run(adapter, "meter-session-filter")
+            presenter.add_marker("Current capture", label="note")
+            presenter.stop_logging()
+
+            presenter.select_session(session_id)
+            full_session = presenter.session_view_model()
+            self.assertEqual(len(full_session.available_contexts), 2)
+            self.assertEqual(len(full_session.chart_points), 2)
+            self.assertEqual(len(full_session.selected_markers), 2)
+
+            current_context = next(ctx for ctx in full_session.available_contexts if "Current" in ctx.label)
+            presenter.select_session_context(current_context.context_id)
+            filtered_session = presenter.session_view_model()
+            self.assertEqual(filtered_session.selected_context_id, current_context.context_id)
+            self.assertEqual(filtered_session.selected_context_label, current_context.label)
+            self.assertEqual(filtered_session.selected_unit_text, "A")
+            self.assertEqual(len(filtered_session.chart_points), 1)
+            self.assertEqual(len(filtered_session.selected_markers), 1)
+            self.assertIn("Samples 1", filtered_session.selected_summary_text)
+        finally:
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ from apps.desktop.viewmodels import (
     RecentDeviceViewModel,
     ScannedDeviceViewModel,
     SessionMarkerViewModel,
+    SessionContextViewModel,
     SettingsViewModel,
     SessionSummaryViewModel,
     SessionViewModel,
@@ -82,6 +83,7 @@ class AppPresenter:
         self._live_points: deque[tuple[float, float]] = deque(maxlen=300)
         self._live_marker_points: deque[tuple[float, float]] = deque(maxlen=100)
         self._live_readings: list[Reading] = []
+        self._live_context_key: tuple[str, str, str] | None = None
         self._chart_t0: datetime | None = None
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
@@ -358,6 +360,9 @@ class AppPresenter:
                     selected_session_id=None,
                     active_title_text="No active session",
                     reading_count_text="0 readings",
+                    selected_context_id=None,
+                    selected_context_label="",
+                    available_contexts=(),
                     selected_summary_text="Min - | Max - | Avg -",
                     selected_unit_text="",
                     selected_session_notes="",
@@ -542,17 +547,35 @@ class AppPresenter:
             raise RuntimeError(f"Unknown session {session_id!r}.")
         readings = self._store.readings.list_for_session(session_id)
         markers = self._store.markers.list_for_session(session_id)
-        stats = summarize_readings(readings)
-        points = tuple(_chart_points(readings))
-        marker_points = tuple(_marker_points(readings, markers))
-        marker_rows = tuple(_marker_vm(marker) for marker in markers)
-        unit_text = next((reading.unit for reading in readings if reading.unit), "")
+        contexts = tuple(_session_context_view_models(readings))
+        current_session = self.session_view_model()
+        selected_context_id = current_session.selected_context_id if current_session.selected_session_id == session_id else None
+        if selected_context_id is not None and selected_context_id not in {ctx.context_id for ctx in contexts}:
+            selected_context_id = None
+
+        filtered_readings = readings if selected_context_id is None else [
+            reading for reading in readings if _reading_context_id(reading) == selected_context_id
+        ]
+        filtered_markers = markers if selected_context_id is None else _markers_for_context(
+            readings,
+            markers,
+            selected_context_id,
+        )
+        stats = summarize_readings(filtered_readings)
+        points = tuple(_chart_points(filtered_readings))
+        marker_points = tuple(_marker_points(filtered_readings, filtered_markers))
+        marker_rows = tuple(_marker_vm(marker) for marker in filtered_markers)
+        unit_text = next((reading.unit for reading in filtered_readings if reading.unit), "")
+        context_label = next((ctx.label for ctx in contexts if ctx.context_id == selected_context_id), "")
         with self._lock:
             self._session = replace(
                 self._session,
                 selected_session_id=session_id,
+                selected_context_id=selected_context_id,
+                selected_context_label=context_label,
                 active_title_text=session.title or session.session_id,
-                reading_count_text=f"{len(readings)} readings",
+                reading_count_text=f"{len(filtered_readings)} readings",
+                available_contexts=contexts,
                 selected_summary_text=_summary_text(stats),
                 selected_unit_text=unit_text,
                 selected_session_notes=session.notes or "",
@@ -561,13 +584,27 @@ class AppPresenter:
                 marker_points=marker_points,
             )
 
+    def select_session_context(self, context_id: str | None) -> None:
+        session_id = self.session_view_model().selected_session_id
+        if session_id is None:
+            return
+        with self._lock:
+            self._session = replace(self._session, selected_context_id=context_id)
+        self.select_session(session_id)
+
     def on_reading(self, reading: Reading) -> None:
         value = "--" if reading.value is None else f"{reading.value:.6g}"
         timestamp = reading.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
+        context_key = _reading_context_key(reading)
+        banner_text = ""
         with self._lock:
-            self._live_readings.append(reading)
-            if self._chart_t0 is None:
+            if self._live_context_key is not None and context_key != self._live_context_key:
+                self._reset_live_chart_state(reading.timestamp_utc)
+                banner_text = f"Live chart reset after meter mode changed to {_reading_context_label(reading)}."
+            elif self._live_context_key is None:
                 self._chart_t0 = reading.timestamp_utc
+            self._live_context_key = context_key
+            self._live_readings.append(reading)
             if reading.value is not None and self._chart_t0 is not None:
                 x_value = max((reading.timestamp_utc - self._chart_t0).total_seconds(), 0.0)
                 self._live_points.append((x_value, reading.value))
@@ -582,6 +619,7 @@ class AppPresenter:
                 measurement_label=reading.measurement_type.value.replace("_", " ").title(),
                 status_text=reading.status.value.replace("_", " ").title(),
                 session_title=session_title,
+                chart_notice_text=banner_text or self._live.chart_notice_text,
                 is_logging=is_logging,
                 last_updated_text=timestamp,
                 summary_text=_summary_text(live_stats),
@@ -628,10 +666,7 @@ class AppPresenter:
         label = device.nickname or device.model_name or device.device_id
         with self._lock:
             self._current_device = device
-            self._chart_t0 = None
-            self._live_points.clear()
-            self._live_marker_points.clear()
-            self._live_readings = []
+            self._reset_live_chart_state()
             self._home = replace(
                 self._home,
                 connection_text=f"Connected to {label}",
@@ -644,6 +679,7 @@ class AppPresenter:
                 status_text="Starting stream...",
                 chart_points=(),
                 marker_points=(),
+                chart_notice_text="",
                 summary_text="Min - | Max - | Avg -",
                 marker_count_text="0 markers",
             )
@@ -667,10 +703,7 @@ class AppPresenter:
     ) -> None:
         with self._lock:
             self._current_device = None
-            self._chart_t0 = None
-            self._live_points.clear()
-            self._live_marker_points.clear()
-            self._live_readings = []
+            self._reset_live_chart_state()
             self._home = replace(
                 self._home,
                 connection_text=connection_text,
@@ -684,6 +717,7 @@ class AppPresenter:
                 session_title=None,
                 chart_points=(),
                 marker_points=(),
+                chart_notice_text="",
                 summary_text="Min - | Max - | Avg -",
                 marker_count_text="0 markers",
             )
@@ -729,6 +763,13 @@ class AppPresenter:
                 is_scanning=self._discovery.is_scanning if is_scanning is _UNCHANGED else is_scanning,
                 is_connecting=self._discovery.is_connecting if is_connecting is _UNCHANGED else is_connecting,
             )
+
+    def _reset_live_chart_state(self, start_at: datetime | None = None) -> None:
+        self._chart_t0 = start_at
+        self._live_context_key = None
+        self._live_points.clear()
+        self._live_marker_points.clear()
+        self._live_readings = []
 
     def _finish_workflow_if_complete(self, state: WorkflowRunState) -> None:
         if state.run.result != WorkflowRunResult.COMPLETED:
@@ -803,6 +844,62 @@ def _summary_text(stats) -> str:
         f"Min {min_text} | Max {max_text} | Avg {avg_text} | "
         f"Samples {stats.reading_count} | Duration {stats.duration_s:.1f}s"
     )
+
+
+def _reading_context_key(reading: Reading) -> tuple[str, str, str]:
+    return (
+        reading.measurement_type.value,
+        reading.unit or "",
+        reading.mode or "",
+    )
+
+
+def _reading_context_id(reading: Reading) -> str:
+    return "\x1f".join(_reading_context_key(reading))
+
+
+def _reading_context_label(reading: Reading) -> str:
+    parts = [reading.measurement_type.value.replace("_", " ").title()]
+    if reading.unit:
+        parts.append(reading.unit)
+    if reading.mode:
+        parts.append(reading.mode.upper())
+    return " / ".join(parts)
+
+
+def _session_context_view_models(readings: list[Reading]) -> list[SessionContextViewModel]:
+    grouped: dict[str, tuple[str, int]] = {}
+    ordered_ids: list[str] = []
+    for reading in readings:
+        context_id = _reading_context_id(reading)
+        if context_id not in grouped:
+            ordered_ids.append(context_id)
+            grouped[context_id] = (_reading_context_label(reading), 0)
+        label, count = grouped[context_id]
+        grouped[context_id] = (label, count + 1)
+    return [
+        SessionContextViewModel(
+            context_id=context_id,
+            label=grouped[context_id][0],
+            display_text=f"{grouped[context_id][0]} ({grouped[context_id][1]} readings)",
+        )
+        for context_id in ordered_ids
+    ]
+
+
+def _markers_for_context(readings: list[Reading], markers: list[SessionMarker], context_id: str) -> list[SessionMarker]:
+    if not readings or not markers:
+        return []
+    selected: list[SessionMarker] = []
+    reading_index = 0
+    current_context_id = _reading_context_id(readings[reading_index])
+    for marker in markers:
+        while reading_index + 1 < len(readings) and readings[reading_index + 1].timestamp_utc <= marker.timestamp_utc:
+            reading_index += 1
+            current_context_id = _reading_context_id(readings[reading_index])
+        if current_context_id == context_id:
+            selected.append(marker)
+    return selected
 
 
 def _chart_points(readings: list[Reading]) -> list[tuple[float, float]]:

@@ -37,6 +37,13 @@ class SessionMarkerViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionContextViewModel:
+    context_id: str
+    label: str
+    display_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowDefinitionViewModel:
     workflow_id: str
     title: str
@@ -71,6 +78,7 @@ class LiveReadingViewModel:
     measurement_label: str = "Idle"
     status_text: str = "Disconnected"
     connection_text: str = "Not connected"
+    chart_notice_text: str = ""
     is_logging: bool = False
     session_title: str | None = None
     last_updated_text: str = "-"
@@ -105,11 +113,14 @@ class DiscoveryViewModel:
 class SessionViewModel:
     active_session_id: str | None = None
     selected_session_id: str | None = None
+    selected_context_id: str | None = None
+    selected_context_label: str = ""
     active_title_text: str = "No active session"
     reading_count_text: str = "0 readings"
     export_status_text: str = ""
     database_path_text: str = ""
     recent_sessions: tuple[SessionSummaryViewModel, ...] = ()
+    available_contexts: tuple[SessionContextViewModel, ...] = ()
     selected_summary_text: str = "Min - | Max - | Avg -"
     selected_unit_text: str = ""
     selected_session_notes: str = ""
