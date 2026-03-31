@@ -4,13 +4,13 @@ Open desktop app, CLI, and Python SDK for working with BLE-enabled Fluke meters 
 
 The project started from a single reverse-engineered prototype in `fluke_ble.py`. The repo now contains a more structured codebase built around:
 
-- canonical domain models,
-- profile-based protocol decoding,
-- shared application services,
-- SQLite session logging,
-- desktop and CLI surfaces on top of the same services,
-- guided workflow execution,
-- an extension boundary for future contributed profiles and workflow packs.
+- canonical domain models
+- profile-based protocol decoding
+- shared application services
+- SQLite session logging
+- desktop and CLI surfaces on top of the same services
+- guided workflow execution
+- an extension boundary for future contributed profiles and workflow packs
 
 The current in-tree device focus is still the Fluke 376 FC.
 
@@ -18,11 +18,11 @@ The current in-tree device focus is still the Fluke 376 FC.
 
 What exists now:
 
-- BLE scan/connect/stream path through shared services
+- BLE scan, connect, and stream path through shared services
 - normalized `Reading` model and 376 FC profile decoder
 - SQLite session, marker, workflow-run, and export support
 - desktop app with discovery, live view, charting, replay, markers, session export, and workflow runner
-- CLI for scan, stream, log, sessions, plugins, fixture capture, and debug bundle export
+- CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
 - hardware-free test coverage using fake BLE adapters and replay frames
@@ -36,7 +36,7 @@ What still needs repeated real-hardware validation:
 
 ## Guiding Methodology
 
-This repo intentionally avoids “desktop-only” or “CLI-only” logic.
+This repo intentionally avoids "desktop-only" or "CLI-only" logic.
 
 The development order has been:
 
@@ -79,10 +79,30 @@ docs/
 - Python 3.11+
 - BLE-capable host
 - virtual environment recommended
-- for desktop UI: `PySide6`
-- for BLE runtime: `bleak`
+- `bleak` for BLE runtime
+- `PySide6` for the desktop UI
 
-## Virtual Environment Setup
+Minimal dependency set:
+
+- `requirements.txt`: CLI + SDK + BLE runtime
+
+Full contributor / desktop dependency set:
+
+- `requirements-full.txt`: desktop, plotting, dashboard/data extras, plus the base BLE runtime
+
+## Installation
+
+### Full install (desktop + CLI + SDK)
+
+macOS / Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-full.txt
+python -m pip install -e .
+```
 
 Windows PowerShell:
 
@@ -91,44 +111,64 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements-full.txt
+python -m pip install -e .
 ```
 
-If you only want the shared CLI/SDK stack:
+### Minimal install (CLI + SDK only)
 
-```powershell
+```bash
 python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
-## Running The App
-
-### Desktop
-
-```powershell
-.\.venv\Scripts\python.exe -m apps.desktop.main
-```
-
-The desktop app currently includes:
-
-- Home
-- Device Discovery
-- Live Reading
-- Session replay and exports
-- Guided Workflows
-- Settings
-
-### CLI
-
-Main entry point:
-
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main --help
-```
-
-Installed entry points from `pyproject.toml`:
+The editable install provides these entry points from `pyproject.toml`:
 
 - `fluke`
 - `fluke-cli`
 - `fluke-desktop`
+
+If you skip `python -m pip install -e .`, use the module entry points directly:
+
+- `python -m apps.cli.main`
+- `python -m apps.desktop.main`
+
+## Running The App
+
+### CLI
+
+Installed entry point:
+
+```bash
+fluke --help
+```
+
+Module fallback:
+
+```bash
+python -m apps.cli.main --help
+```
+
+Global flags:
+
+- `--version`
+- `-v` / `--verbose`
+- `--json` for commands that support structured output
+
+### Desktop
+
+Installed entry point:
+
+```bash
+fluke-desktop
+```
+
+Module fallback:
+
+```bash
+python -m apps.desktop.main
+```
+
+On macOS, the desktop app uses `PySide6.QtAsyncio` for Qt/BLE event-loop integration. Other platforms continue to use the background async runner.
 
 ### Python SDK
 
@@ -162,76 +202,99 @@ asyncio.run(main())
 
 ## CLI Quickstart
 
-### 1. Scan
+### 1. Scan for nearby devices
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main scan --timeout 10 --name Fluke
+```bash
+fluke scan --timeout 10 --name Fluke
 ```
 
-### 2. Stream normalized readings
+### 2. Stream readings
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main stream `
-  --device "<DEVICE_ID>" `
-  --profile fluke_376fc
+Plain text stream:
+
+```bash
+fluke stream --device "<DEVICE_ID>" --profile fluke_376fc
 ```
 
-### 3. Log to SQLite and export
+Retro terminal dashboard:
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main log `
-  --device "<DEVICE_ID>" `
-  --profile fluke_376fc `
-  --database data\fluke.db `
-  --duration 30 `
-  --title "Bench run" `
-  --notes "Initial validation" `
-  --csv-output exports\session.csv `
-  --json-output exports\session.json
+```bash
+fluke stream --device "<DEVICE_ID>" --profile fluke_376fc --dashboard
 ```
 
-### 4. Inspect sessions
+Additional live terminal views:
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main sessions list --database data\fluke.db
-.\.venv\Scripts\python.exe -m apps.cli.main sessions export `
-  --database data\fluke.db `
-  --session "<SESSION_ID>" `
-  --format json `
-  --output exports\session.json
+```bash
+fluke watch --device "<DEVICE_ID>" --profile fluke_376fc
+fluke alert --device "<DEVICE_ID>" --profile fluke_376fc --high 120
 ```
 
-### 5. Show supported profiles
+### 3. Log to SQLite and optionally export
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main devices supported
+```bash
+fluke log \
+  --device "<DEVICE_ID>" \
+  --profile fluke_376fc \
+  --duration 30 \
+  --title "Bench run" \
+  --notes "Initial validation" \
+  --csv-output exports/session.csv \
+  --json-output exports/session.json
 ```
 
-### 6. Inspect plugins
+### 4. Inspect recorded sessions
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main plugins list
+```bash
+fluke sessions list
+fluke sessions export --session "<SESSION_ID>" --format json --output exports/session.json
 ```
 
-### 7. Capture raw fixtures
+### 5. Browse or run workflows
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main fixtures capture `
-  --device "<DEVICE_ID>" `
-  --profile fluke_376fc `
-  --duration 10 `
-  --output fixtures\capture.json
+```bash
+fluke workflow list
+fluke workflow run --workflow battery_pack_check_v1 --device "<DEVICE_ID>" --profile fluke_376fc
 ```
 
-### 8. Export a debug bundle
+### 6. Structured output
 
-```powershell
-.\.venv\Scripts\python.exe -m apps.cli.main debug bundle `
-  --database data\fluke.db `
-  --output artifacts\debug-bundle.zip
+The `--json` flag is global, so place it before the subcommand:
+
+```bash
+fluke --json devices supported
+fluke --json scan --timeout 5
+fluke --json sessions list
+fluke --json workflow list
 ```
+
+### 7. Plugins and diagnostics
+
+```bash
+fluke plugins list
+fluke fixtures capture --device "<DEVICE_ID>" --profile fluke_376fc --duration 10 --output fixtures/capture.json
+fluke debug bundle --output artifacts/debug-bundle.zip
+```
+
+### Default database path
+
+When `--database` is omitted, commands use a platform-appropriate default path:
+
+- macOS: `~/Library/Application Support/fluke-community/fluke.db`
+- Linux: `~/.local/share/fluke-community/fluke.db`
+- Windows: `%LOCALAPPDATA%/fluke-community/fluke.db`
+
+The default path is resolved lazily, so commands such as `fluke --version` do not create directories or touch the database.
 
 ## Desktop Workflow
+
+The desktop app currently includes:
+
+- Home
+- Device Discovery
+- Live Reading
+- Session
+- Workflows
+- Settings
 
 ### Live Reading
 
@@ -240,10 +303,12 @@ The Live Reading tab supports:
 - current reading display
 - unit and measurement type
 - live chart
-- min/max/avg/sample summary
-- session start/stop
+- min / max / avg / sample summary
+- session start / stop
 - manual session markers
 - live chart PNG export
+
+To avoid misleading mixed-unit charts, the live chart automatically resets when the meter changes measurement context. The reset is keyed on `measurement_type`, `unit`, and `mode`, and the UI shows a small banner when that happens.
 
 ### Session
 
@@ -251,10 +316,19 @@ The Session tab supports:
 
 - recent sessions
 - replay chart
+- measurement-view filtering for mixed-mode sessions
 - marker review
 - session notes
-- CSV/JSON export
+- CSV / JSON export
 - chart PNG export
+
+Replay filtering is derived in the UI layer rather than rewriting stored data:
+
+- raw readings stay stored exactly as captured
+- compatible unit ranges are grouped into cleaner replay views
+- mode is only retained where it is meaningful for replay
+- tiny transitional / unknown groups are suppressed from the filter UI
+- `All Measurements` remains available as a mixed-session overview
 
 ### Workflows
 
@@ -263,7 +337,7 @@ The Workflows tab supports:
 - selecting a built-in workflow
 - starting a workflow run against the active session stack
 - completing or skipping steps
-- capture steps that validate the current live reading type/unit
+- capture steps that validate the current live reading type / unit
 - recent workflow run history stored in SQLite
 
 Built-in workflow pack:
@@ -353,7 +427,7 @@ These are meant to lower the barrier for remote debugging when hardware is unava
 - notes
 - tags
 - device id
-- start/end time
+- start / end time
 - profile id
 
 ### Marker
@@ -367,16 +441,22 @@ These are meant to lower the barrier for remote debugging when hardware is unava
 
 - workflow id
 - session id
-- start/end time
+- start / end time
 - run result
 
 ## Testing
 
-Run everything:
+Quick regression suite used during active development:
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
-.\.venv\Scripts\python.exe -m compileall apps packages tests
+```bash
+python -m unittest tests.unit.test_cli_main tests.unit.test_desktop_presenter tests.unit.test_desktop_views tests.unit.test_sdk_client
+```
+
+Full suite:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+python -m compileall apps packages tests
 ```
 
 The test strategy is intentionally layered:
@@ -408,15 +488,15 @@ Already implemented:
 
 - shared BLE + protocol + CLI slice
 - session logging and exports
-- desktop live/session UX
-- charts, markers, summaries, chart export
+- desktop live / session UX
+- charts, markers, summaries, and chart export
 - guided workflows
-- plugin boundary, fixture capture, debug bundle export
+- plugin boundary, fixture capture, and debug bundle export
 
 Next likely work:
 
 - more real hardware validation
 - additional profile support
-- richer workflow/reporting features
+- richer workflow / reporting features
 - packaging and installer work
 - contributor docs expansion

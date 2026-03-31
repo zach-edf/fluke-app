@@ -23,4 +23,7 @@ __pycache__/
 exports/
 .test-tmp/
 fluke_community.egg-info/
+.cursor/
+.claude/
+
 
