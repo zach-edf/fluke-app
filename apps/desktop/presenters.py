@@ -71,6 +71,8 @@ class AppPresenter:
         app_version: str = "0.1.0",
         export_directory: str | Path = "exports",
         device_operation_timeout_s: float = 10.0,
+        auto_reconnect_attempts: int = 3,
+        auto_reconnect_delay_s: float = 1.5,
         workflow_catalog: object | None = None,
     ) -> None:
         self._device_manager = device_manager
@@ -113,6 +115,10 @@ class AppPresenter:
         self._live_context_key: tuple[str, str, str] | None = None
         self._chart_t0: datetime | None = None
         self._last_reading_time: datetime | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._auto_reconnect_attempts = max(0, int(auto_reconnect_attempts))
+        self._auto_reconnect_delay_s = max(0.0, float(auto_reconnect_delay_s))
+        self._auto_reconnect_task: asyncio.Task[None] | None = None
         self._alert_high: float | None = None
         self._alert_low: float | None = None
         self._device_manager.subscribe_readings(self._recorder.on_reading)
@@ -147,6 +153,7 @@ class AppPresenter:
             return replace(self._workflow)
 
     async def scan_devices(self, timeout_s: float = 5.0) -> tuple[ScannedDeviceViewModel, ...]:
+        self._remember_running_loop()
         self._set_home_busy(True)
         self._set_discovery_busy(is_scanning=True)
         self._set_discovery(status_text="Scanning...")
@@ -165,6 +172,8 @@ class AppPresenter:
             self._set_home_busy(False)
 
     async def connect_device(self, device_id: str | None = None, profile_id: str | None = None) -> DeviceInfo:
+        self._remember_running_loop()
+        self._cancel_auto_reconnect()
         target_device_id = device_id or self._discovery.selected_device_id
         if not target_device_id:
             raise RuntimeError("Select a device before connecting.")
@@ -181,6 +190,14 @@ class AppPresenter:
             except asyncio.TimeoutError as exc:
                 self._set_discovery(status_text=f"Connection timed out for {target_device_id}")
                 self._set_connection_status("Connection timed out")
+                with self._lock:
+                    self._settings = replace(
+                        self._settings,
+                        diagnostics_text=(
+                            f"Timed out while connecting to {target_device_id}. "
+                            "If the meter shows connected, wait a moment and retry the BLE session."
+                        ),
+                    )
                 raise RuntimeError(f"Timed out while connecting to {target_device_id}.") from exc
 
             label = device.nickname or device.model_name or device.device_id
@@ -198,7 +215,10 @@ class AppPresenter:
                     connection_text="Disconnected",
                     live_status_text="Disconnected",
                     discovery_status_text=f"Connected to {label}, but live stream startup timed out.",
-                    diagnostics_text=f"Live stream startup timed out for {label}.",
+                    diagnostics_text=(
+                        f"Live stream startup timed out for {label}. "
+                        "The BLE link opened, but notifications did not start in time."
+                    ),
                 )
                 raise RuntimeError(f"Connected to {label}, but live stream startup timed out.") from exc
             except Exception as exc:
@@ -224,6 +244,8 @@ class AppPresenter:
             self._set_home_busy(False)
 
     async def reconnect_last_device(self) -> DeviceInfo:
+        self._remember_running_loop()
+        self._cancel_auto_reconnect()
         self._set_home_busy(True)
         try:
             recent = self._store.devices.list_recent(limit=1)
@@ -236,6 +258,8 @@ class AppPresenter:
             self._set_home_busy(False)
 
     async def disconnect_device(self) -> None:
+        self._remember_running_loop()
+        self._cancel_auto_reconnect()
         self._set_home_busy(True)
         if self._workflow_runner.active_state() is not None:
             self._workflow_runner.cancel()
@@ -257,19 +281,21 @@ class AppPresenter:
 
     def _on_device_disconnected(self) -> None:
         """Called when the BLE device disconnects unexpectedly (e.g. powered off)."""
-        if self._workflow_runner.active_state() is not None:
-            self._workflow_runner.cancel()
-            self._workflow_owned_session_id = None
-            self._workflow_status_message = "Workflow cancelled — device disconnected unexpectedly."
-        if self._recorder.active_session() is not None:
-            self.stop_logging()
-        self._set_disconnected_state(
-            connection_text="Device disconnected unexpectedly",
-            live_status_text="Disconnected",
-            discovery_status_text="Device lost",
-            diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
-        )
-        self.refresh_workflows()
+        device = self._current_device
+        if device is None or self._auto_reconnect_attempts <= 0:
+            self._finalize_unexpected_disconnect(
+                diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
+            )
+            return
+
+        loop = self._event_loop
+        if loop is None:
+            self._finalize_unexpected_disconnect(
+                diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
+            )
+            return
+
+        loop.call_soon_threadsafe(self._schedule_auto_reconnect, device)
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -374,6 +400,8 @@ class AppPresenter:
             self._session = replace(self._session, export_status_text=message)
 
     async def shutdown(self) -> None:
+        self._remember_running_loop()
+        self._cancel_auto_reconnect()
         if self._workflow_runner.active_state() is not None:
             self._workflow_runner.cancel()
         if self._recorder.active_session() is not None:
@@ -500,10 +528,15 @@ class AppPresenter:
 
     def report_error(self, message: str) -> None:
         with self._lock:
-            self._home = replace(self._home, message_text=message, connection_text=f"Error: {message}")
+            self._home = replace(
+                self._home,
+                message_text=message,
+                connection_text=f"Error: {message}",
+                connection_health="error",
+            )
             self._discovery = replace(self._discovery, status_text=f"Error: {message}")
             self._session = replace(self._session, export_status_text=message)
-            self._live = replace(self._live, status_text="Error")
+            self._live = replace(self._live, status_text="Error", connection_health="error")
             self._settings = replace(self._settings, diagnostics_text=message)
             self._workflow = replace(self._workflow, status_text=message)
         self._workflow_status_message = message
@@ -716,6 +749,8 @@ class AppPresenter:
                     alert_active = True
                     alert_message = f"LOW ALERT: {reading.value:.4g} {reading.unit} below {self._alert_low:.4g}"
             self._live = replace(self._live, alert_active=alert_active, alert_message=alert_message)
+            self._home = replace(self._home, connection_health="streaming", is_busy=False)
+            self._discovery = replace(self._discovery, is_connecting=False, is_reconnecting=False)
             self._session = replace(
                 self._session,
                 reading_count_text=f"{self._recorder.reading_count()} readings",
@@ -743,9 +778,171 @@ class AppPresenter:
                 self._live = replace(
                     self._live,
                     chart_notice_text=stale_text,
-                    connection_health="connected",
+                    connection_health="stale",
                 )
-                self._home = replace(self._home, connection_health="connected")
+                self._home = replace(self._home, connection_health="stale")
+
+    def _remember_running_loop(self) -> None:
+        try:
+            self._event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+    def _cancel_auto_reconnect(self) -> None:
+        task = self._auto_reconnect_task
+        self._auto_reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_auto_reconnect(self, device: DeviceInfo) -> None:
+        if self._auto_reconnect_task is not None and not self._auto_reconnect_task.done():
+            return
+        self._auto_reconnect_task = asyncio.create_task(self._attempt_auto_reconnect(device))
+
+    async def _attempt_auto_reconnect(self, device: DeviceInfo) -> None:
+        label = _device_label(device)
+        self._record_system_marker("Connection lost. Automatic reconnect started.", label="system")
+        last_error: Exception | None = None
+        try:
+            for attempt in range(1, self._auto_reconnect_attempts + 1):
+                if attempt > 1 and self._auto_reconnect_delay_s > 0:
+                    await asyncio.sleep(self._auto_reconnect_delay_s)
+                self._set_reconnecting_state(device, attempt, self._auto_reconnect_attempts)
+                try:
+                    reconnected = await asyncio.wait_for(
+                        self._device_manager.reconnect(),
+                        timeout=self._device_operation_timeout_s,
+                    )
+                    self._store.upsert_device(reconnected)
+                    self.refresh_recent_devices()
+                    await asyncio.wait_for(
+                        self._device_manager.start_stream(),
+                        timeout=self._device_operation_timeout_s,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    try:
+                        await self._device_manager.disconnect()
+                    except Exception:
+                        pass
+                    continue
+
+                self._set_reconnected_state(reconnected)
+                self._record_system_marker("Connection restored after automatic reconnect.", label="system")
+                self.refresh_recent_sessions()
+                return
+
+            detail = "Automatic reconnect failed. Check that the meter is powered on, nearby, and not held by another app."
+            if last_error is not None:
+                detail = f"{detail} Last error: {last_error}"
+            self._finalize_unexpected_disconnect(diagnostics_text=detail, reconnect_failed=True)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._auto_reconnect_task is asyncio.current_task():
+                self._auto_reconnect_task = None
+
+    def _set_reconnecting_state(self, device: DeviceInfo, attempt: int, total_attempts: int) -> None:
+        label = _device_label(device)
+        status = f"Reconnecting to {label} ({attempt}/{total_attempts})..."
+        with self._lock:
+            self._home = replace(
+                self._home,
+                connection_text=status,
+                active_device_text=f"{label} ({device.device_id})",
+                message_text="Connection lost. Trying to restore the BLE session...",
+                is_busy=True,
+                is_connected=False,
+                connection_health="reconnecting",
+            )
+            self._live = replace(
+                self._live,
+                connection_text=status,
+                status_text="Reconnecting",
+                is_connected=False,
+                connection_health="reconnecting",
+                chart_notice_text="Connection lost. Attempting automatic reconnect...",
+            )
+            self._discovery = replace(
+                self._discovery,
+                selected_device_id=device.device_id,
+                status_text=status,
+                is_connecting=False,
+                is_reconnecting=True,
+            )
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=(
+                    f"BLE connection dropped for {label}. "
+                    f"Attempting automatic reconnect ({attempt}/{total_attempts})."
+                ),
+            )
+
+    def _set_reconnected_state(self, device: DeviceInfo) -> None:
+        label = _device_label(device)
+        with self._lock:
+            self._current_device = device
+            self._home = replace(
+                self._home,
+                connection_text=f"Connected to {label}",
+                active_device_text=f"{label} ({device.device_id})",
+                message_text=f"Reconnected to {label}.",
+                is_busy=False,
+                is_connected=True,
+                connection_health="streaming",
+            )
+            self._live = replace(
+                self._live,
+                connection_text=f"Connected to {label}",
+                status_text="Streaming",
+                is_connected=True,
+                connection_health="streaming",
+                chart_notice_text="Connection restored after automatic reconnect.",
+            )
+            self._discovery = replace(
+                self._discovery,
+                selected_device_id=device.device_id,
+                status_text=f"Reconnected to {label}",
+                is_connecting=False,
+                is_reconnecting=False,
+            )
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=f"Reconnected to {label}; BLE stream resumed.",
+            )
+
+    def _finalize_unexpected_disconnect(self, *, diagnostics_text: str, reconnect_failed: bool = False) -> None:
+        if self._workflow_runner.active_state() is not None:
+            self._workflow_runner.cancel()
+            self._workflow_owned_session_id = None
+            if reconnect_failed:
+                self._workflow_status_message = "Workflow cancelled because automatic reconnect failed."
+            else:
+                self._workflow_status_message = "Workflow cancelled — device disconnected unexpectedly."
+        if self._recorder.active_session() is not None:
+            self._record_system_marker(
+                "Automatic reconnect failed. Logging stopped." if reconnect_failed else "Device disconnected unexpectedly.",
+                label="system",
+            )
+            self.stop_logging()
+        self._set_disconnected_state(
+            connection_text="Reconnect failed" if reconnect_failed else "Device disconnected unexpectedly",
+            live_status_text="Reconnect failed" if reconnect_failed else "Disconnected",
+            discovery_status_text="Reconnect failed" if reconnect_failed else "Device lost",
+            diagnostics_text=diagnostics_text,
+            connection_health="error" if reconnect_failed else "disconnected",
+        )
+        self.refresh_workflows()
+
+    def _record_system_marker(self, note: str, *, label: str) -> None:
+        if self._recorder.active_session() is None:
+            return
+        try:
+            self.add_marker(note, label=label)
+        except Exception:
+            pass
 
     def _resolve_export_session_id(self, session_id: str | None) -> str:
         target = session_id or self._last_completed_session_id
@@ -770,9 +967,21 @@ class AppPresenter:
     def _set_connecting_state(self, target_label: str) -> None:
         status = f"Connecting to {target_label}..."
         with self._lock:
-            self._home = replace(self._home, connection_text=status, message_text="")
-            self._live = replace(self._live, connection_text=status, status_text="Connecting")
-            self._discovery = replace(self._discovery, status_text=status)
+            self._home = replace(
+                self._home,
+                connection_text=status,
+                message_text="",
+                is_connected=False,
+                connection_health="connecting",
+            )
+            self._live = replace(
+                self._live,
+                connection_text=status,
+                status_text="Connecting",
+                is_connected=False,
+                connection_health="connecting",
+            )
+            self._discovery = replace(self._discovery, status_text=status, is_reconnecting=False)
             self._settings = replace(self._settings, diagnostics_text=status)
 
     def _set_connected_pending_stream_state(self, device: DeviceInfo) -> None:
@@ -804,6 +1013,8 @@ class AppPresenter:
                 self._discovery,
                 selected_device_id=device.device_id,
                 status_text=f"Connected to {label}. Starting live stream...",
+                is_connecting=False,
+                is_reconnecting=False,
             )
             self._settings = replace(
                 self._settings,
@@ -817,6 +1028,7 @@ class AppPresenter:
         live_status_text: str,
         discovery_status_text: str,
         diagnostics_text: str,
+        connection_health: str = "disconnected",
     ) -> None:
         with self._lock:
             self._current_device = None
@@ -826,7 +1038,8 @@ class AppPresenter:
                 connection_text=connection_text,
                 active_device_text="No device connected",
                 is_connected=False,
-                connection_health="disconnected",
+                connection_health=connection_health,
+                is_busy=False,
             )
             self._live = replace(
                 self._live,
@@ -836,7 +1049,7 @@ class AppPresenter:
                 connection_text=connection_text,
                 status_text=live_status_text,
                 is_connected=False,
-                connection_health="disconnected",
+                connection_health=connection_health,
                 is_logging=False,
                 session_title=None,
                 last_updated_text="-",
@@ -846,7 +1059,12 @@ class AppPresenter:
                 summary_text="Min - | Max - | Avg -",
                 marker_count_text="0 markers",
             )
-            self._discovery = replace(self._discovery, status_text=discovery_status_text)
+            self._discovery = replace(
+                self._discovery,
+                status_text=discovery_status_text,
+                is_connecting=False,
+                is_reconnecting=False,
+            )
             self._settings = replace(self._settings, diagnostics_text=diagnostics_text)
 
     def _set_discovery(
@@ -881,12 +1099,18 @@ class AppPresenter:
         *,
         is_scanning: bool | object = _UNCHANGED,
         is_connecting: bool | object = _UNCHANGED,
+        is_reconnecting: bool | object = _UNCHANGED,
     ) -> None:
         with self._lock:
             self._discovery = replace(
                 self._discovery,
                 is_scanning=self._discovery.is_scanning if is_scanning is _UNCHANGED else is_scanning,
                 is_connecting=self._discovery.is_connecting if is_connecting is _UNCHANGED else is_connecting,
+                is_reconnecting=(
+                    self._discovery.is_reconnecting
+                    if is_reconnecting is _UNCHANGED
+                    else is_reconnecting
+                ),
             )
 
     def _reset_live_chart_state(self, start_at: datetime | None = None) -> None:
@@ -907,7 +1131,7 @@ class AppPresenter:
 
 
 def _device_vm(device: DeviceInfo) -> ScannedDeviceViewModel:
-    label = device.nickname or device.model_name or device.device_id
+    label = _device_label(device)
     rssi_text = "-" if device.rssi is None else f"{device.rssi} dBm"
     support_text = device.support_level or "unknown"
     return ScannedDeviceViewModel(
@@ -933,7 +1157,7 @@ def _session_vm(session: Session) -> SessionSummaryViewModel:
 
 
 def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
-    label = device.nickname or device.model_name or device.device_id
+    label = _device_label(device)
     last_seen_raw = str(device.metadata.get("last_seen_at") or "-")
     if last_seen_raw != "-":
         try:
@@ -950,6 +1174,10 @@ def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
         support_text=device.support_level,
         last_seen_text=last_seen_text,
     )
+
+
+def _device_label(device: DeviceInfo) -> str:
+    return device.nickname or device.model_name or device.device_id
 
 
 def _marker_vm(marker: SessionMarker) -> SessionMarkerViewModel:

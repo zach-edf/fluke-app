@@ -113,6 +113,7 @@ class DiscoveryViewModel:
     selected_device_id: str | None = None
     is_scanning: bool = False
     is_connecting: bool = False
+    is_reconnecting: bool = False
 
 
 @dataclass(frozen=True, slots=True)

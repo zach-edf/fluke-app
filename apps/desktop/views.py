@@ -776,8 +776,11 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
 # ---------------------------------------------------------------------------
 
 _HEALTH_COLORS = {
+    "connecting": "#3b7f9a",
     "streaming": "#0b7a6b",
     "connected": "#ce6a06",
+    "reconnecting": "#8a5a00",
+    "stale": "#ce6a06",
     "disconnected": "#a83232",
     "error": "#a83232",
     "idle": "#a0afa8",
@@ -828,9 +831,10 @@ def _refresh_discovery(runtime, panel: _PanelRefs) -> None:
                 break
     is_scanning = getattr(discovery, "is_scanning", False)
     is_connecting = getattr(discovery, "is_connecting", False)
-    panel.refs["scan_button"].setEnabled(not is_scanning and not is_connecting)
+    is_reconnecting = getattr(discovery, "is_reconnecting", False)
+    panel.refs["scan_button"].setEnabled(not is_scanning and not is_connecting and not is_reconnecting)
     panel.refs["connect_button"].setEnabled(
-        discovery.selected_device_id is not None and not is_scanning and not is_connecting
+        discovery.selected_device_id is not None and not is_scanning and not is_connecting and not is_reconnecting
     )
 
 

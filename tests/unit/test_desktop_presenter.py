@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,6 +22,38 @@ class HangingSubscribeAdapter(FakeBleAdapter):
     async def subscribe(self, device_id: str, characteristic_uuid: str, callback) -> None:  # type: ignore[override]
         self._require_connected(device_id)
         await asyncio.Event().wait()
+
+
+class FailingReconnectAdapter(FakeBleAdapter):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.fail_connect_for: set[str] = set()
+
+    async def connect(self, device_id: str) -> None:  # type: ignore[override]
+        if device_id in self.fail_connect_for:
+            raise RuntimeError(f"Simulated reconnect failure for {device_id}")
+        await super().connect(device_id)
+
+
+class DelayedReconnectAdapter(FakeBleAdapter):
+    def __init__(self, *args, reconnect_delay_s: float = 0.03, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.delayed_connect_for: set[str] = set()
+        self._reconnect_delay_s = reconnect_delay_s
+
+    async def connect(self, device_id: str) -> None:  # type: ignore[override]
+        if device_id in self.delayed_connect_for:
+            await asyncio.sleep(self._reconnect_delay_s)
+        await super().connect(device_id)
+
+
+async def _wait_until(predicate, timeout: float = 0.5, interval: float = 0.01) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("Condition was not met before timeout.")
 
 
 class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
@@ -196,6 +229,168 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(presenter.live_view_model().status_text, "Disconnected")
             self.assertIn("timed out", presenter.discovery_view_model().status_text)
             self.assertIn("timed out", presenter.settings_view_model().diagnostics_text)
+        finally:
+            store.close()
+
+    async def test_presenter_auto_reconnects_after_unexpected_disconnect(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-reconnect.db")
+        adapter = DelayedReconnectAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-reconnect",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:44",
+                    rssi=-46,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(
+            manager,
+            store,
+            device_operation_timeout_s=0.05,
+            auto_reconnect_attempts=2,
+            auto_reconnect_delay_s=0.01,
+        )
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-reconnect")
+            presenter.start_logging(title="Reconnect Session")
+
+            first = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("12.10 V", "dc")),
+                )
+            )
+            await first.run(adapter, "meter-reconnect")
+
+            adapter.delayed_connect_for.add("meter-reconnect")
+            await adapter.simulate_unexpected_disconnect("meter-reconnect")
+            await _wait_until(lambda: "Reconnecting" in presenter.live_view_model().connection_text)
+            await _wait_until(
+                lambda: adapter.is_connected("meter-reconnect")
+                and any(key[0] == "meter-reconnect" for key in adapter.subscription_keys)
+            )
+
+            second = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("12.25 V", "dc")),
+                )
+            )
+            await second.run(adapter, "meter-reconnect")
+
+            live = presenter.live_view_model()
+            session = presenter.session_view_model()
+            self.assertTrue(live.is_logging)
+            self.assertEqual(live.connection_health, "streaming")
+            self.assertIn("Connected", live.connection_text)
+            self.assertIn("Connection restored", live.chart_notice_text)
+            self.assertEqual(session.reading_count_text, "2 readings")
+            self.assertEqual(live.marker_count_text, "2 markers")
+        finally:
+            store.close()
+
+    async def test_presenter_reports_reconnect_failure_and_stops_logging(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-reconnect-fail.db")
+        adapter = FailingReconnectAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-reconnect-fail",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:55",
+                    rssi=-45,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(
+            manager,
+            store,
+            device_operation_timeout_s=0.02,
+            auto_reconnect_attempts=2,
+            auto_reconnect_delay_s=0.01,
+        )
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-reconnect-fail")
+            presenter.start_logging(title="Reconnect Failure Session")
+
+            first = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("11.90 V", "dc")),
+                )
+            )
+            await first.run(adapter, "meter-reconnect-fail")
+
+            adapter.fail_connect_for.add("meter-reconnect-fail")
+            await adapter.simulate_unexpected_disconnect("meter-reconnect-fail")
+            await _wait_until(lambda: presenter.live_view_model().connection_text == "Reconnect failed", timeout=0.75)
+
+            live = presenter.live_view_model()
+            settings = presenter.settings_view_model()
+            workflow = presenter.workflow_view_model()
+            self.assertFalse(live.is_logging)
+            self.assertEqual(live.connection_health, "error")
+            self.assertEqual(live.status_text, "Reconnect failed")
+            self.assertIn("Automatic reconnect failed", settings.diagnostics_text)
+            self.assertIn("Select a workflow", workflow.status_text)
+        finally:
+            store.close()
+
+    async def test_presenter_marks_live_connection_as_stale_when_readings_stop(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-stale.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-stale",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:66",
+                    rssi=-43,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-stale")
+            reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("10.00 V", "dc")),
+                )
+            )
+            await reading.run(adapter, "meter-stale")
+
+            presenter._last_reading_time = datetime.now(timezone.utc) - timedelta(seconds=6)
+            presenter.check_reading_freshness()
+
+            live = presenter.live_view_model()
+            home = presenter.home_view_model()
+            self.assertEqual(live.connection_health, "stale")
+            self.assertEqual(home.connection_health, "stale")
+            self.assertIn("No reading received", live.chart_notice_text)
         finally:
             store.close()
 
