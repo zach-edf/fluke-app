@@ -384,6 +384,9 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     session = QLabel()
     summary = QLabel()
     marker_count = QLabel()
+    alert_status = QLabel()
+    alert_status.setWordWrap(True)
+    alert_status.setObjectName("alert_status")
     chart = build_reading_chart(
         title="Live Reading",
         empty_text="Connect to a supported meter to start plotting live data.",
@@ -409,8 +412,12 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     def _apply_alerts() -> None:
         low_text = alert_low_input.text().strip()
         high_text = alert_high_input.text().strip()
-        low = float(low_text) if low_text else None
-        high = float(high_text) if high_text else None
+        try:
+            low = float(low_text) if low_text else None
+            high = float(high_text) if high_text else None
+        except ValueError:
+            runtime.presenter.set_alert_configuration_error("thresholds must be numeric values.")
+            return
         runtime.presenter.set_alert_thresholds(low, high)
 
     alert_apply_button.clicked.connect(lambda: _safe_call(runtime, _apply_alerts))
@@ -484,7 +491,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     for widget in (value, unit, measurement, status):
         layout.addWidget(widget)
     layout.addLayout(connection_row)
-    for widget in (chart_notice, alert_banner, session, last_updated, summary, marker_count):
+    for widget in (chart_notice, alert_banner, alert_status, session, last_updated, summary, marker_count):
         layout.addWidget(widget)
     layout.addWidget(chart.widget)
     layout.addLayout(alert_row)
@@ -498,7 +505,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             "value": value, "unit": unit, "measurement": measurement,
             "status": status, "connection_dot": connection_dot, "connection": connection,
             "chart_notice": chart_notice, "alert_banner": alert_banner, "session": session,
-            "last_updated": last_updated, "summary": summary,
+            "alert_status": alert_status, "last_updated": last_updated, "summary": summary,
             "marker_count": marker_count, "title_input": title_input,
             "marker_input": marker_input,
             "start_button": start_button, "stop_button": stop_button,
@@ -506,6 +513,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             "export_chart_button": export_chart_button,
             "disconnect_button": disconnect_button,
             "chart": chart,
+            "last_alert_event_id": 0,
         },
     )
 
@@ -705,9 +713,14 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     active_session = QLabel()
     latest_capture = QLabel()
     run_result = QLabel()
+    selected_run = QLabel()
+    selected_run.setWordWrap(True)
     note_input = QLineEdit()
     note_input.setPlaceholderText("Optional step note")
     note_input.setToolTip("Add an optional note when completing or skipping a step")
+    report_view = QTextEdit()
+    report_view.setReadOnly(True)
+    report_view.setMinimumHeight(180)
 
     completed_steps = _make_table(["Title", "Status", "Detail"], min_height=100)
     recent_runs = _make_table(["Title", "Started", "Result", "Session"], min_height=100)
@@ -722,12 +735,18 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     cancel_button = QPushButton("Cancel Workflow")
     cancel_button.setObjectName("danger_button")
     cancel_button.setToolTip("Cancel the running workflow")
+    export_report_button = QPushButton("Export Workflow Report")
+    export_report_button.setToolTip("Export the selected workflow run report as Markdown")
 
     def on_selection_changed() -> None:
         item = workflow_list.currentItem()
         runtime.presenter.select_workflow(None if item is None else item.data(0x0100))
 
+    def on_recent_run_changed() -> None:
+        runtime.presenter.select_workflow_run(_selected_table_id(recent_runs))
+
     workflow_list.itemSelectionChanged.connect(on_selection_changed)
+    recent_runs.itemSelectionChanged.connect(on_recent_run_changed)
     start_button.clicked.connect(lambda: _safe_call(runtime, lambda: runtime.presenter.start_workflow()))
     complete_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: _complete_workflow_step(runtime, note_input))
@@ -735,6 +754,17 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     skip_button.clicked.connect(lambda: _safe_call(runtime, lambda: _skip_workflow_step(runtime, note_input)))
     cancel_button.clicked.connect(
         lambda: _confirm_and_cancel_workflow(window, runtime)
+    )
+    export_report_button.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_workflow_report(
+                _workflow_report_export_path(runtime),
+                run_id=_selected_workflow_run_id(runtime),
+            ),
+            "Workflow Report",
+        )
     )
 
     left = QVBoxLayout()
@@ -752,7 +782,7 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     right = QVBoxLayout()
     for widget in (
         status, title, description, progress, current_step,
-        instruction, requirement, active_session, latest_capture, run_result, note_input,
+        instruction, requirement, active_session, latest_capture, run_result, selected_run, note_input,
     ):
         right.addWidget(widget)
     steps_header = QLabel("Completed Steps")
@@ -763,7 +793,12 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     runs_header.setObjectName("section_header")
     right.addWidget(runs_header)
     right.addWidget(recent_runs)
+    report_header = QLabel("Workflow Report")
+    report_header.setObjectName("section_header")
+    right.addWidget(report_header)
+    right.addWidget(report_view)
     right.addLayout(actions)
+    right.addWidget(export_report_button)
 
     content = QHBoxLayout()
     content.addLayout(left, 2)
@@ -778,10 +813,12 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
             "current_step": current_step, "instruction": instruction,
             "requirement": requirement, "active_session": active_session,
             "latest_capture": latest_capture, "run_result": run_result,
+            "selected_run": selected_run, "report_view": report_view,
             "note_input": note_input, "completed_steps": completed_steps,
             "recent_runs": recent_runs,
             "start_button": start_button, "complete_button": complete_button,
             "skip_button": skip_button, "cancel_button": cancel_button,
+            "export_report_button": export_report_button,
             "list_item_cls": QListWidgetItem,
         },
     )
@@ -870,6 +907,7 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["last_updated"].setText(f"Last Update: {live.last_updated_text}")
     panel.refs["summary"].setText(live.summary_text)
     panel.refs["marker_count"].setText(live.marker_count_text)
+    panel.refs["alert_status"].setText(live.alert_status_text)
     panel.refs["start_button"].setEnabled(live.is_connected and not live.is_logging)
     panel.refs["stop_button"].setEnabled(live.is_logging)
     panel.refs["add_marker_button"].setEnabled(live.is_logging)
@@ -879,6 +917,10 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     alert_banner = panel.refs["alert_banner"]
     alert_banner.setText(live.alert_message)
     alert_banner.setVisible(live.alert_active)
+    last_alert_event_id = panel.refs.get("last_alert_event_id", 0)
+    if live.alert_active and live.alert_event_id > last_alert_event_id:
+        QApplication.beep()
+    panel.refs["last_alert_event_id"] = live.alert_event_id
     panel.refs["chart"].set_data(
         live.chart_points, live.marker_points,
         unit_text=live.unit_text, measurement_label=live.measurement_label,
@@ -969,6 +1011,7 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
     panel.refs["active_session"].setText(f"Session: {workflow.active_session_text}")
     panel.refs["latest_capture"].setText(workflow.latest_capture_text)
     panel.refs["run_result"].setText(f"Run Result: {workflow.run_result_text}")
+    panel.refs["selected_run"].setText(workflow.selected_run_summary_text)
 
     workflow_list = panel.refs["workflow_list"]
     item_cls = panel.refs["list_item_cls"]
@@ -992,12 +1035,29 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
         panel.refs["recent_runs"],
         [(r.run_id, [r.title, r.started_at_text, r.result_text, r.session_id]) for r in workflow.recent_runs],
     )
+    recent_runs = panel.refs["recent_runs"]
+    matched_run = False
+    if workflow.selected_run_id is not None:
+        for i in range(recent_runs.rowCount()):
+            item = recent_runs.item(i, 0)
+            if item and item.data(0x0100) == workflow.selected_run_id:
+                if recent_runs.currentRow() != i:
+                    recent_runs.selectRow(i)
+                matched_run = True
+                break
+    if not matched_run and recent_runs.currentRow() != -1:
+        recent_runs.clearSelection()
+
+    report_view = panel.refs["report_view"]
+    if report_view.toPlainText() != workflow.report_text:
+        report_view.setPlainText(workflow.report_text)
 
     panel.refs["start_button"].setEnabled(workflow.selected_workflow_id is not None and not workflow.is_running)
     panel.refs["complete_button"].setEnabled(workflow.is_running)
     panel.refs["skip_button"].setEnabled(workflow.is_running)
     panel.refs["cancel_button"].setEnabled(workflow.is_running)
     panel.refs["note_input"].setEnabled(workflow.is_running)
+    panel.refs["export_report_button"].setEnabled(workflow.selected_run_id is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -1077,6 +1137,10 @@ def _selected_session_id(runtime) -> str | None:
     return runtime.presenter.session_view_model().selected_session_id
 
 
+def _selected_workflow_run_id(runtime) -> str | None:
+    return runtime.presenter.workflow_view_model().selected_run_id
+
+
 def _export_directory(runtime) -> Path:
     configured = runtime.presenter.settings_view_model().export_directory_text.strip()
     return Path(configured or "exports")
@@ -1094,6 +1158,11 @@ def _session_chart_export_path(runtime) -> Path:
 
 def _live_chart_export_path(runtime) -> Path:
     return _export_directory(runtime) / "live-chart.png"
+
+
+def _workflow_report_export_path(runtime) -> Path:
+    run_id = _selected_workflow_run_id(runtime) or "workflow-run"
+    return _export_directory(runtime) / f"workflow-run-{run_id}.md"
 
 
 def _complete_workflow_step(runtime, note_input) -> None:

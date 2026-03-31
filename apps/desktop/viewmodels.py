@@ -93,8 +93,10 @@ class LiveReadingViewModel:
     last_updated_text: str = "-"
     summary_text: str = "Min - | Max - | Avg -"
     marker_count_text: str = "0 markers"
+    alert_status_text: str = "Alerts disabled."
     alert_active: bool = False
     alert_message: str = ""
+    alert_event_id: int = 0
     chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
 
@@ -160,6 +162,7 @@ class SettingsViewModel:
 class WorkflowViewModel:
     status_text: str = "Select a workflow to review the steps."
     selected_workflow_id: str | None = None
+    selected_run_id: str | None = None
     workflows: tuple[WorkflowDefinitionViewModel, ...] = ()
     current_title_text: str = "No workflow selected"
     current_description_text: str = ""
@@ -170,6 +173,8 @@ class WorkflowViewModel:
     active_session_text: str = "No workflow session"
     latest_capture_text: str = "No captured step yet"
     run_result_text: str = ""
+    selected_run_summary_text: str = "No workflow run selected"
+    report_text: str = ""
     is_running: bool = False
     completed_steps: tuple[WorkflowStepViewModel, ...] = ()
     recent_runs: tuple[WorkflowRunSummaryViewModel, ...] = ()

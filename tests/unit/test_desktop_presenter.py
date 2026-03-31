@@ -199,6 +199,80 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
+    async def test_presenter_can_review_and_export_historical_workflow_run_reports(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-workflow-report.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-workflow-report",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:12",
+                    rssi=-50,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-workflow-report")
+            presenter.select_workflow("battery_pack_check_v1")
+
+            first_run_id = presenter.start_workflow()
+            presenter.complete_workflow_step(note="Configured first run.")
+
+            reading_1 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("19.80 V", "dc")),
+                )
+            )
+            await reading_1.run(adapter, "meter-workflow-report")
+            presenter.complete_workflow_step(note="Captured open-circuit voltage.")
+
+            reading_2 = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("18.95 V", "dc")),
+                )
+            )
+            await reading_2.run(adapter, "meter-workflow-report")
+            presenter.complete_workflow_step(note="Captured loaded voltage.")
+            presenter.complete_workflow_step(note="First run passed.")
+
+            second_run_id = presenter.start_workflow()
+            presenter.complete_workflow_step(note="Configured second run.")
+            presenter.cancel_workflow()
+
+            presenter.select_workflow_run(first_run_id)
+            first_vm = presenter.workflow_view_model()
+            self.assertEqual(first_vm.selected_run_id, first_run_id)
+            self.assertEqual(first_vm.run_result_text, "Completed")
+            self.assertIn("Viewing run: Battery Pack Check", first_vm.selected_run_summary_text)
+            self.assertIn("Captured open-circuit voltage.", first_vm.report_text)
+            self.assertIn("Summary: 2 captured | 2 completed | 0 skipped", first_vm.report_text)
+
+            export_path = presenter.export_workflow_report(tmp / "workflow-report.md", run_id=first_run_id)
+            exported_text = Path(export_path).read_text(encoding="utf-8")
+            self.assertIn(f"Run ID: {first_run_id}", exported_text)
+            self.assertIn("Result: Completed", exported_text)
+            self.assertIn("Captured loaded voltage.", exported_text)
+
+            presenter.select_workflow_run(second_run_id)
+            second_vm = presenter.workflow_view_model()
+            self.assertEqual(second_vm.selected_run_id, second_run_id)
+            self.assertEqual(second_vm.run_result_text, "Aborted")
+            self.assertIn("Stopped before:", second_vm.current_step_title)
+            self.assertIn("Configured second run.", second_vm.report_text)
+        finally:
+            store.close()
+
     async def test_presenter_reports_stream_start_timeout_and_disconnects(self) -> None:
         tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
         tmp = tmp_root / uuid4().hex
@@ -391,6 +465,125 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(live.connection_health, "stale")
             self.assertEqual(home.connection_health, "stale")
             self.assertIn("No reading received", live.chart_notice_text)
+        finally:
+            store.close()
+
+    async def test_presenter_arms_and_triggers_desktop_alerts_without_spam(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-alerts.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-alerts",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:88",
+                    rssi=-42,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-alerts")
+            presenter.start_logging(title="Alerts Session")
+            presenter.set_alert_thresholds(low=None, high=10.0)
+
+            first_alert = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("11.0 V", "dc")),
+                )
+            )
+            await first_alert.run(adapter, "meter-alerts")
+            first_live = presenter.live_view_model()
+            self.assertTrue(first_live.alert_active)
+            self.assertEqual(first_live.alert_status_text, "Alerts armed: high > 10.")
+            self.assertIn("HIGH ALERT", first_live.alert_message)
+            self.assertEqual(first_live.alert_event_id, 1)
+            self.assertEqual(first_live.marker_count_text, "1 markers")
+
+            sustained_alert = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("11.4 V", "dc")),
+                )
+            )
+            await sustained_alert.run(adapter, "meter-alerts")
+            second_live = presenter.live_view_model()
+            self.assertEqual(second_live.alert_event_id, 1)
+            self.assertEqual(second_live.marker_count_text, "1 markers")
+
+            recovered = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("9.5 V", "dc")),
+                )
+            )
+            await recovered.run(adapter, "meter-alerts")
+            recovered_live = presenter.live_view_model()
+            self.assertFalse(recovered_live.alert_active)
+
+            second_excursion = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("10.8 V", "dc")),
+                )
+            )
+            await second_excursion.run(adapter, "meter-alerts")
+            final_live = presenter.live_view_model()
+            self.assertEqual(final_live.alert_event_id, 2)
+            self.assertEqual(final_live.marker_count_text, "2 markers")
+        finally:
+            store.close()
+
+    async def test_presenter_rejects_invalid_alert_thresholds_without_clearing_existing_config(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-alert-config.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-alert-config",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:99",
+                    rssi=-41,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-alert-config")
+            presenter.set_alert_thresholds(low=2.0, high=10.0)
+            self.assertEqual(
+                presenter.live_view_model().alert_status_text,
+                "Alerts armed: low < 2, high > 10.",
+            )
+
+            presenter.set_alert_thresholds(low=12.0, high=10.0)
+            self.assertIn("Alert config error", presenter.live_view_model().alert_status_text)
+
+            reading = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("11.1 V", "dc")),
+                )
+            )
+            await reading.run(adapter, "meter-alert-config")
+            live = presenter.live_view_model()
+            self.assertTrue(live.alert_active)
+            self.assertEqual(live.alert_event_id, 1)
         finally:
             store.close()
 

@@ -22,6 +22,9 @@ What exists now:
 - normalized `Reading` model and 376 FC profile decoder
 - SQLite session, marker, workflow-run, and export support
 - desktop app with discovery, live view, charting, replay, markers, session export, and workflow runner
+  - live chart resets when the meter changes measurement context
+  - session replay filters mixed-mode sessions into cleaner measurement views without rewriting raw data
+  - workflow run history can be reviewed and exported as reports from the desktop UI
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
@@ -339,6 +342,9 @@ The Workflows tab supports:
 - completing or skipping steps
 - capture steps that validate the current live reading type / unit
 - recent workflow run history stored in SQLite
+- selecting recent runs to review historical step results
+- in-app workflow reports for the selected run
+- Markdown export of workflow run reports
 
 Built-in workflow pack:
 
@@ -491,12 +497,12 @@ Already implemented:
 - desktop live / session UX
 - charts, markers, summaries, and chart export
 - guided workflows
+- workflow run review and reporting
 - plugin boundary, fixture capture, and debug bundle export
 
 Next likely work:
 
 - more real hardware validation
 - additional profile support
-- richer workflow / reporting features
 - packaging and installer work
 - contributor docs expansion

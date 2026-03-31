@@ -190,6 +190,10 @@ QLabel[objectName="alert_banner"] {
     font-weight: 600;
     font-size: 14px;
 }
+QLabel[objectName="alert_status"] {
+    color: #8b4700;
+    font-weight: 500;
+}
 
 /* ── Status Bar ──────────────────────────────────────── */
 QWidget[objectName="status_bar"] {
@@ -387,6 +391,10 @@ QLabel[objectName="alert_banner"] {
     padding: 6px 10px;
     font-weight: 600;
     font-size: 14px;
+}
+QLabel[objectName="alert_status"] {
+    color: #f0b36a;
+    font-weight: 500;
 }
 
 /* ── Scroll Bars ─────────────────────────────────────── */
