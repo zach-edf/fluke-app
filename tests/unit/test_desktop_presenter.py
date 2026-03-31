@@ -540,6 +540,69 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
+    async def test_presenter_can_compare_sessions_with_shared_measurement_view(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-session-compare.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-session-compare",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:77",
+                    rssi=-44,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-session-compare")
+
+            reference_session_id = presenter.start_logging(title="Reference Session")
+            reference = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.2 kOhm", "")),
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("1.3 kOhm", "")),
+                )
+            )
+            await reference.run(adapter, "meter-session-compare")
+            presenter.stop_logging()
+
+            comparison_session_id = presenter.start_logging(title="Comparison Session")
+            comparison = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("150 ohm", "")),
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("250 ohm", "")),
+                )
+            )
+            await comparison.run(adapter, "meter-session-compare")
+            presenter.stop_logging()
+
+            presenter.select_session(reference_session_id)
+            presenter.select_compare_session(comparison_session_id)
+
+            session_vm = presenter.session_view_model()
+            self.assertEqual(session_vm.selected_context_label, "Resistance")
+            self.assertEqual(session_vm.selected_unit_text, "kOhm")
+            self.assertEqual(session_vm.compare_session_id, comparison_session_id)
+            self.assertEqual(session_vm.compare_session_label, "Comparison Session")
+            self.assertEqual(len(session_vm.compare_chart_points), 2)
+            self.assertAlmostEqual(session_vm.compare_chart_points[0][1], 0.15, places=3)
+            self.assertAlmostEqual(session_vm.compare_chart_points[1][1], 0.25, places=3)
+            self.assertIn("Compared with Comparison Session", session_vm.compare_summary_text)
+        finally:
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

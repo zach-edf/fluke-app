@@ -14,6 +14,7 @@ from apps.desktop.viewmodels import (
     LiveReadingViewModel,
     RecentDeviceViewModel,
     ScannedDeviceViewModel,
+    SessionCompareViewModel,
     SessionMarkerViewModel,
     SessionContextViewModel,
     SettingsViewModel,
@@ -59,6 +60,8 @@ class _ReplayGroup:
     label: str
     display_text: str
     readings: list[Reading]
+    normalization_key: str | None
+    display_unit: str
     total_count: int
     numeric_count: int
 
@@ -438,11 +441,16 @@ class AppPresenter:
                     selected_context_id=None,
                     selected_context_label="",
                     available_contexts=(),
+                    available_compare_sessions=(),
                     selected_summary_text="Min - | Max - | Avg -",
+                    compare_session_id=None,
+                    compare_session_label="",
+                    compare_summary_text="",
                     selected_unit_text="",
                     selected_session_notes="",
                     selected_markers=(),
                     chart_points=(),
+                    compare_chart_points=(),
                     marker_points=(),
                 )
 
@@ -629,14 +637,24 @@ class AppPresenter:
         markers = self._store.markers.list_for_session(session_id)
         current_session = self.session_view_model()
         replay_groups = _build_session_replay_groups(readings)
+        compare_options = tuple(
+            _session_compare_vm(item)
+            for item in self._store.sessions.list_recent(limit=25)
+            if item.session_id != session_id
+        )
         same_session = current_session.selected_session_id == session_id
         selected_context_id = current_session.selected_context_id if same_session else None
+        selected_compare_session_id = current_session.compare_session_id if same_session else None
         if selected_context_id is not None and selected_context_id not in {group.context_id for group in replay_groups}:
             selected_context_id = None
+        if selected_compare_session_id not in {item.session_id for item in compare_options}:
+            selected_compare_session_id = None
         if selected_context_id is None and replay_groups and (not same_session or not current_session.available_contexts):
             if len(replay_groups) > 1:
                 selected_context_id = replay_groups[0].context_id
 
+        selected_group: _ReplayGroup | None = None
+        primary_stats = None
         if selected_context_id is None and len(replay_groups) > 1:
             filtered_readings = []
             filtered_markers = markers
@@ -659,13 +677,47 @@ class AppPresenter:
                 markers,
                 selected_group.context_id,
             )
-            stats = summarize_readings(filtered_readings)
-            selected_summary_text = _summary_text(stats)
+            primary_stats = summarize_readings(filtered_readings)
+            selected_summary_text = _summary_text(primary_stats)
             unit_text = next((reading.unit for reading in filtered_readings if reading.unit), "")
             context_label = "" if selected_group is None else selected_group.label
             reading_count_text = f"{len(filtered_readings)} readings"
 
         points = tuple(_chart_points(filtered_readings))
+        compare_points: tuple[tuple[float, float], ...] = ()
+        compare_summary_text = ""
+        compare_session_label = ""
+        if selected_compare_session_id is not None:
+            compare_session = self._store.sessions.get(selected_compare_session_id)
+            if compare_session is None:
+                selected_compare_session_id = None
+            else:
+                compare_session_label = compare_session.title or compare_session.session_id
+                if selected_group is None or primary_stats is None:
+                    compare_summary_text = "Select a measurement view to compare mixed sessions."
+                else:
+                    compare_readings_all = self._store.readings.list_for_session(selected_compare_session_id)
+                    compare_groups = _build_session_replay_groups(compare_readings_all)
+                    compare_group = next(
+                        (group for group in compare_groups if group.context_id == selected_group.context_id),
+                        None,
+                    )
+                    if compare_group is None:
+                        compare_summary_text = f"{compare_session_label} does not contain {selected_group.label}."
+                    else:
+                        compare_readings = _coerce_group_display_unit(
+                            compare_group,
+                            unit_text or selected_group.display_unit,
+                        )
+                        compare_points = tuple(_chart_points(compare_readings))
+                        compare_stats = summarize_readings(compare_readings)
+                        compare_summary_text = _comparison_summary_text(
+                            compare_session_label,
+                            primary_stats,
+                            compare_stats,
+                            unit_text or selected_group.display_unit,
+                        )
+
         marker_points = tuple(_marker_points(filtered_readings, filtered_markers))
         marker_rows = tuple(_marker_vm(marker) for marker in filtered_markers)
         contexts = tuple(
@@ -682,14 +734,19 @@ class AppPresenter:
                 selected_session_id=session_id,
                 selected_context_id=selected_context_id,
                 selected_context_label=context_label,
+                compare_session_id=selected_compare_session_id,
+                compare_session_label=compare_session_label,
                 active_title_text=session.title or session.session_id,
                 reading_count_text=reading_count_text,
                 available_contexts=contexts if len(contexts) > 1 else (),
+                available_compare_sessions=compare_options,
                 selected_summary_text=selected_summary_text,
+                compare_summary_text=compare_summary_text,
                 selected_unit_text=unit_text,
                 selected_session_notes=session.notes or "",
                 selected_markers=marker_rows,
                 chart_points=points,
+                compare_chart_points=compare_points,
                 marker_points=marker_points,
             )
 
@@ -700,6 +757,14 @@ class AppPresenter:
         with self._lock:
             self._session = replace(self._session, selected_context_id=context_id)
         self.select_session(session_id)
+
+    def select_compare_session(self, session_id: str | None) -> None:
+        selected_session_id = self.session_view_model().selected_session_id
+        if selected_session_id is None:
+            return
+        with self._lock:
+            self._session = replace(self._session, compare_session_id=session_id)
+        self.select_session(selected_session_id)
 
     def on_reading(self, reading: Reading) -> None:
         value = "--" if reading.value is None else f"{reading.value:.6g}"
@@ -1156,6 +1221,16 @@ def _session_vm(session: Session) -> SessionSummaryViewModel:
     )
 
 
+def _session_compare_vm(session: Session) -> SessionCompareViewModel:
+    started = session.started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    label = session.title or session.session_id
+    return SessionCompareViewModel(
+        session_id=session.session_id,
+        label=label,
+        display_text=f"{label} | {started}",
+    )
+
+
 def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
     label = _device_label(device)
     last_seen_raw = str(device.metadata.get("last_seen_at") or "-")
@@ -1200,6 +1275,26 @@ def _summary_text(stats) -> str:
     )
 
 
+def _comparison_summary_text(compare_label: str, primary_stats, compare_stats, unit_text: str) -> str:
+    avg_delta = _format_delta(primary_stats.avg_value, compare_stats.avg_value, suffix=f" {unit_text}".rstrip())
+    max_delta = _format_delta(primary_stats.max_value, compare_stats.max_value, suffix=f" {unit_text}".rstrip())
+    duration_delta = _format_delta(primary_stats.duration_s, compare_stats.duration_s, suffix="s")
+    sample_delta = primary_stats.reading_count - compare_stats.reading_count
+    sample_prefix = "+" if sample_delta > 0 else ""
+    return (
+        f"Compared with {compare_label}: "
+        f"Avg {avg_delta} | Max {max_delta} | Duration {duration_delta} | Samples {sample_prefix}{sample_delta}"
+    )
+
+
+def _format_delta(current_value: float | None, baseline_value: float | None, *, suffix: str = "") -> str:
+    if current_value is None or baseline_value is None:
+        return "-"
+    delta = current_value - baseline_value
+    prefix = "+" if delta > 0 else ""
+    return f"{prefix}{delta:.4g}{suffix}"
+
+
 def _reading_context_key(reading: Reading) -> tuple[str, str, str]:
     return (
         reading.measurement_type.value,
@@ -1240,12 +1335,15 @@ def _build_session_replay_groups(readings: list[Reading]) -> list[_ReplayGroup]:
         if descriptor.is_unknown and has_known_groups and len(raw_group) <= _UNKNOWN_REPLAY_THRESHOLD:
             continue
         normalized_group = _normalize_replay_group(raw_group, descriptor)
+        display_unit = next((reading.unit for reading in normalized_group if reading.unit), "")
         groups.append(
             _ReplayGroup(
                 context_id=descriptor.context_id,
                 label=descriptor.label,
                 display_text=f"{descriptor.label} ({len(raw_group)} readings)",
                 readings=normalized_group,
+                normalization_key=descriptor.normalization_key,
+                display_unit=display_unit,
                 total_count=len(raw_group),
                 numeric_count=numeric_count,
             )
@@ -1334,6 +1432,32 @@ def _normalize_replay_group(readings: list[Reading], descriptor: _ReplayDescript
             normalized.append(replace(reading, unit=display_unit))
             continue
         base_value = _base_unit_value(reading, descriptor.normalization_key)
+        if base_value is None:
+            normalized.append(replace(reading, unit=display_unit))
+            continue
+        normalized.append(replace(reading, value=base_value / display_factor, unit=display_unit))
+    return normalized
+
+
+def _coerce_group_display_unit(group: _ReplayGroup, display_unit: str) -> list[Reading]:
+    if not display_unit or group.normalization_key is None or group.display_unit == display_unit:
+        return group.readings
+    return _normalize_readings_to_unit(group.readings, group.normalization_key, display_unit)
+
+
+def _normalize_readings_to_unit(
+    readings: list[Reading],
+    normalization_key: str,
+    display_unit: str,
+) -> list[Reading]:
+    unit_scale = dict(_REPLAY_UNIT_SCALES[normalization_key])
+    display_factor = unit_scale[display_unit]
+    normalized: list[Reading] = []
+    for reading in readings:
+        if reading.value is None:
+            normalized.append(replace(reading, unit=display_unit))
+            continue
+        base_value = _base_unit_value(reading, normalization_key)
         if base_value is None:
             normalized.append(replace(reading, unit=display_unit))
             continue

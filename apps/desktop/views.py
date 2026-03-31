@@ -516,12 +516,16 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     active = QLabel()
     count = QLabel()
     summary = QLabel()
+    compare_summary = QLabel()
+    compare_summary.setWordWrap(True)
     database = QLabel()
     database.setWordWrap(True)
     export_status = QLabel()
     export_status.setWordWrap(True)
     context_filter = QComboBox()
     context_filter.setToolTip("Filter replay chart and summary by measurement context")
+    compare_filter = QComboBox()
+    compare_filter.setToolTip("Overlay another session using the current measurement view")
 
     recent = _make_table(["Title", "Started", "Ended"], min_height=150)
     markers_table = _make_table(["Time", "Label", "Note"], min_height=100)
@@ -549,6 +553,9 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     def on_context_changed() -> None:
         _safe_call(runtime, lambda: runtime.presenter.select_session_context(context_filter.currentData()))
 
+    def on_compare_changed() -> None:
+        _safe_call(runtime, lambda: runtime.presenter.select_compare_session(compare_filter.currentData()))
+
     export_csv.clicked.connect(
         lambda: _export_and_notify(
             window, runtime,
@@ -574,6 +581,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     )
     recent.itemSelectionChanged.connect(on_selection_changed)
     context_filter.currentIndexChanged.connect(on_context_changed)
+    compare_filter.currentIndexChanged.connect(on_compare_changed)
 
     session_list_column = QVBoxLayout()
     header = QLabel("Recent Sessions")
@@ -582,7 +590,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     session_list_column.addWidget(recent)
 
     detail_column = QVBoxLayout()
-    for widget in (active, count, summary, database, export_status):
+    for widget in (active, count, summary, compare_summary, database, export_status):
         detail_column.addWidget(widget)
     context_row = QHBoxLayout()
     context_label = QLabel("Measurement View")
@@ -590,6 +598,12 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     context_row.addWidget(context_label)
     context_row.addWidget(context_filter, 1)
     detail_column.addLayout(context_row)
+    compare_row = QHBoxLayout()
+    compare_label = QLabel("Compare Against")
+    compare_label.setObjectName("section_header")
+    compare_row.addWidget(compare_label)
+    compare_row.addWidget(compare_filter, 1)
+    detail_column.addLayout(compare_row)
     detail_column.addWidget(chart.widget)
     notes_header = QLabel("Session Notes")
     notes_header.setObjectName("section_header")
@@ -615,9 +629,11 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
         panel=panel,
         refs={
             "active": active, "count": count, "summary": summary,
+            "compare_summary": compare_summary,
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
             "context_filter": context_filter, "context_label": context_label,
+            "compare_filter": compare_filter, "compare_label": compare_label,
             "export_csv": export_csv, "export_json": export_json,
             "export_chart": export_chart, "chart": chart,
         },
@@ -877,6 +893,8 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     panel.refs["active"].setText(f"Selected Session: {session.active_title_text}")
     panel.refs["count"].setText(session.reading_count_text)
     panel.refs["summary"].setText(session.selected_summary_text)
+    panel.refs["compare_summary"].setText(session.compare_summary_text)
+    panel.refs["compare_summary"].setVisible(bool(session.compare_summary_text))
     panel.refs["database"].setText(f"Database: {session.database_path_text}")
     panel.refs["export_status"].setText(session.export_status_text)
 
@@ -906,16 +924,27 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         [(None, "All Measurements")] + [(ctx.context_id, ctx.display_text) for ctx in session.available_contexts],
         session.selected_context_id,
     )
+    _sync_combo_rows(
+        panel.refs["compare_filter"],
+        [(None, "No Comparison")] + [(item.session_id, item.display_text) for item in session.available_compare_sessions],
+        session.compare_session_id,
+    )
     show_context_filter = bool(session.available_contexts)
+    show_compare_filter = bool(session.available_compare_sessions)
     panel.refs["context_filter"].setVisible(show_context_filter)
     panel.refs["context_label"].setVisible(show_context_filter)
+    panel.refs["compare_filter"].setVisible(show_compare_filter)
+    panel.refs["compare_label"].setVisible(show_compare_filter)
 
     panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_chart"].setEnabled(bool(session.chart_points))
     panel.refs["chart"].set_data(
         session.chart_points, session.marker_points,
-        unit_text=session.selected_unit_text, measurement_label=session.selected_context_label or "Session Replay",
+        unit_text=session.selected_unit_text,
+        measurement_label=session.selected_context_label or "Session Replay",
+        comparison_points=session.compare_chart_points,
+        comparison_label=session.compare_session_label or "Comparison",
     )
 
 

@@ -44,6 +44,13 @@ class SessionContextViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionCompareViewModel:
+    session_id: str
+    label: str
+    display_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowDefinitionViewModel:
     workflow_id: str
     title: str
@@ -122,17 +129,22 @@ class SessionViewModel:
     selected_session_id: str | None = None
     selected_context_id: str | None = None
     selected_context_label: str = ""
+    compare_session_id: str | None = None
+    compare_session_label: str = ""
     active_title_text: str = "No active session"
     reading_count_text: str = "0 readings"
     export_status_text: str = ""
     database_path_text: str = ""
     recent_sessions: tuple[SessionSummaryViewModel, ...] = ()
     available_contexts: tuple[SessionContextViewModel, ...] = ()
+    available_compare_sessions: tuple[SessionCompareViewModel, ...] = ()
     selected_summary_text: str = "Min - | Max - | Avg -"
+    compare_summary_text: str = ""
     selected_unit_text: str = ""
     selected_session_notes: str = ""
     selected_markers: tuple[SessionMarkerViewModel, ...] = ()
     chart_points: tuple[tuple[float, float], ...] = ()
+    compare_chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
 
 
