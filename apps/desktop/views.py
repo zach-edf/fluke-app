@@ -18,6 +18,7 @@ from apps.desktop._qt import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QShortcut,
     QTabWidget,
     QTableWidget,
@@ -154,8 +155,8 @@ def create_main_window(runtime) -> QWidget:
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("Fluke Community Desktop")
-            self.setMinimumSize(800, 500)
-            self.resize(1100, 720)
+            self.setMinimumSize(900, 620)
+            self.resize(1100, 760)
 
             root = QWidget()
             outer = QVBoxLayout(root)
@@ -493,14 +494,19 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     layout.addLayout(connection_row)
     for widget in (chart_notice, alert_banner, alert_status, session, last_updated, summary, marker_count):
         layout.addWidget(widget)
-    layout.addWidget(chart.widget)
+    layout.addWidget(chart.widget, 1)
     layout.addLayout(alert_row)
     layout.addLayout(form)
     layout.addLayout(marker_row)
     layout.addLayout(action_row)
 
+    scroll = QScrollArea()
+    scroll.setWidget(panel)
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
     return _PanelRefs(
-        panel=panel,
+        panel=scroll,
         refs={
             "value": value, "unit": unit, "measurement": measurement,
             "status": status, "connection_dot": connection_dot, "connection": connection,

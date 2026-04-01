@@ -10,6 +10,9 @@ from fluke_protocol.profiles.base import DeviceProfile
 
 FLUKE_MEAS_UUID = "b6982901-7562-11e2-b50d-00163e46f8fe"
 FLUKE_STATUS_UUID = "b698290f-7562-11e2-b50d-00163e46f8fe"
+# Service UUID present in the BLE advertisement packet (distinct from the GATT
+# characteristic UUIDs above, which are only visible after connecting).
+FLUKE_ADV_SERVICE_UUID = "b6981800-7562-11e2-b50d-00163e46f8fe"
 
 _VALUE_UNIT_RE = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*([^\d\s].*)?$")
 _VALUE_UNIT_ALT_RE = re.compile(r"^([+-]?\d+(?:\.\d+)?)\s*L\s*([^\d\s].*)?$", re.IGNORECASE)
@@ -125,6 +128,15 @@ class Fluke376FCProfile(DeviceProfile):
         for candidate in candidates:
             token = candidate.lower().replace(" ", "")
             if "376fc" in token or ("fluke" in token and "376" in token):
+                return True
+        # Fallback: match by the service UUID the 376 FC includes in its advertisement
+        # packet. This is distinct from the GATT characteristic UUIDs (MEAS/STATUS),
+        # which only appear after connecting. On Windows the WinRT BLE backend
+        # sometimes returns None for both device.name and adv.local_name for unpaired
+        # devices, so this UUID-based path provides a reliable secondary match.
+        service_uuids = metadata.get("service_uuids") or []
+        if isinstance(service_uuids, list):
+            if FLUKE_ADV_SERVICE_UUID.lower() in {u.lower() for u in service_uuids}:
                 return True
         return False
 

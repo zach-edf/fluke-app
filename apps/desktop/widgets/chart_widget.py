@@ -113,6 +113,7 @@ def build_reading_chart(
         raise RuntimeError("PySide6 with QtCharts is required to render charts.") from exc
 
     container = QWidget()
+    container.setMinimumHeight(minimum_height)
     layout = QVBoxLayout(container)
     layout.setContentsMargins(0, 0, 0, 0)
 

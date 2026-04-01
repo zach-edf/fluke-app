@@ -10,6 +10,7 @@ STYLESHEET = """
 /* ── Global ───────────────────────────────────────────── */
 QMainWindow, QWidget {
     font-size: 13px;
+    color: #1a2b26;
 }
 
 /* ── Buttons ──────────────────────────────────────────── */
@@ -107,6 +108,7 @@ QTableWidget {
 }
 QTableWidget::item {
     padding: 4px 8px;
+    color: #1a2b26;
 }
 QHeaderView::section {
     background: #e8efec;
@@ -128,6 +130,7 @@ QListWidget {
 }
 QListWidget::item {
     padding: 4px 8px;
+    color: #1a2b26;
 }
 
 /* ── Text Inputs ──────────────────────────────────────── */

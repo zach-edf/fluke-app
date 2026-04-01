@@ -14,7 +14,7 @@ for path in (ROOT, PACKAGES):
         sys.path.insert(0, text)
 
 from fluke_core.enums import MeasurementType, ReadingStatus
-from fluke_protocol.profiles.fluke_376fc import FLUKE_MEAS_UUID, FLUKE_STATUS_UUID, Fluke376FCProfile
+from fluke_protocol.profiles.fluke_376fc import FLUKE_ADV_SERVICE_UUID, FLUKE_MEAS_UUID, FLUKE_STATUS_UUID, Fluke376FCProfile
 
 
 def measurement_payload(primary: str, mode: str) -> bytes:
@@ -29,6 +29,18 @@ class Fluke376FCProfileTests(unittest.TestCase):
         self.assertTrue(profile.matches("Fluke 376 FC", {}))
         self.assertTrue(profile.matches(None, {"advertisement_name": "Shop 376FC"}))
         self.assertFalse(profile.matches("Random Sensor", {}))
+
+    def test_matches_by_service_uuid_fallback(self) -> None:
+        # Simulates Windows WinRT behaviour where adv name is None but the
+        # advertised service UUID is present. FLUKE_ADV_SERVICE_UUID is what
+        # the 376 FC includes in its advertisement packet; the MEAS/STATUS UUIDs
+        # are GATT characteristics only visible after connecting.
+        profile = Fluke376FCProfile()
+        self.assertTrue(profile.matches(None, {"service_uuids": [FLUKE_ADV_SERVICE_UUID]}))
+        self.assertTrue(profile.matches(None, {"service_uuids": [FLUKE_ADV_SERVICE_UUID, FLUKE_MEAS_UUID]}))
+        self.assertFalse(profile.matches(None, {"service_uuids": [FLUKE_MEAS_UUID]}))
+        self.assertFalse(profile.matches(None, {"service_uuids": ["00001234-0000-1000-8000-00805f9b34fb"]}))
+        self.assertFalse(profile.matches(None, {}))
 
     def test_parse_dc_voltage_reading(self) -> None:
         profile = Fluke376FCProfile()
