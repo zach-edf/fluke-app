@@ -8,8 +8,9 @@ from typing import Any
 
 from apps.cli.runtime import default_database_path
 from apps.desktop.presenters import AppPresenter
-from fluke_app import DeviceManager, EventBus, ReadingStreamService
-from fluke_plugins import build_profile_registry, build_workflow_catalog
+from fluke_app import DeviceManager, EventBus, ReadingStreamService, load_workflow_catalog
+from fluke_plugins import load_plugin_bundle
+from fluke_protocol import ProfileRegistry
 from fluke_store import FlukeStore
 
 
@@ -107,8 +108,9 @@ def build_runtime(
 ) -> DesktopRuntime:
     adapter = ble_adapter if ble_adapter is not None else _build_bleak_adapter()
     store = FlukeStore(store_path or default_database_path())
-    profile_registry = build_profile_registry()
-    workflow_catalog = build_workflow_catalog()
+    plugin_bundle = load_plugin_bundle()
+    profile_registry = ProfileRegistry(list(plugin_bundle.profiles))
+    workflow_catalog = load_workflow_catalog(extra_paths=list(plugin_bundle.workflow_paths))
     manager = DeviceManager(
         ble_adapter=adapter,
         profile_registry=profile_registry,
@@ -117,7 +119,13 @@ def build_runtime(
     )
     runner = LoopRunner(event_loop) if event_loop is not None else AsyncRunner()
     return DesktopRuntime(
-        presenter=AppPresenter(manager, store, app_version=app_version, workflow_catalog=workflow_catalog),
+        presenter=AppPresenter(
+            manager,
+            store,
+            app_version=app_version,
+            workflow_catalog=workflow_catalog,
+            workflow_extra_paths=plugin_bundle.workflow_paths,
+        ),
         runner=runner,
         store=store,
     )

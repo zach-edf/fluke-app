@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from statistics import median
 import threading
@@ -25,7 +26,14 @@ from apps.desktop.viewmodels import (
     WorkflowStepViewModel,
     WorkflowViewModel,
 )
-from fluke_app import ExportService, SessionRecorder, WorkflowRunner, load_workflow_catalog, new_session
+from fluke_app import (
+    ExportService,
+    SessionRecorder,
+    WorkflowRunner,
+    default_workflow_directory,
+    load_workflow_catalog,
+    new_session,
+)
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 from fluke_core.enums import MeasurementType, WorkflowRunResult, WorkflowStepResultStatus
 from fluke_core.models.marker import SessionMarker
@@ -77,6 +85,7 @@ class AppPresenter:
         auto_reconnect_attempts: int = 3,
         auto_reconnect_delay_s: float = 1.5,
         workflow_catalog: object | None = None,
+        workflow_extra_paths: tuple[str | Path, ...] = (),
     ) -> None:
         self._device_manager = device_manager
         self._store = store
@@ -101,7 +110,12 @@ class AppPresenter:
             export_directory_text=str(self._export_directory),
             diagnostics_text="PySide6 and BLE runtime configured.",
         )
-        self._workflow_catalog = workflow_catalog or load_workflow_catalog()
+        self._workflow_directory = default_workflow_directory()
+        self._workflow_extra_paths = tuple(Path(path) for path in workflow_extra_paths)
+        self._workflow_catalog = workflow_catalog or load_workflow_catalog(
+            self._workflow_directory,
+            extra_paths=self._workflow_extra_paths,
+        )
         self._workflow_runner = WorkflowRunner(
             self._workflow_catalog,
             store.workflow_runs,
@@ -662,6 +676,51 @@ class AppPresenter:
         self.add_marker(f"Started workflow: {definition.title}", label="workflow")
         self.refresh_workflows()
         return state.run.run_id
+
+    def create_workflow(self, definition: WorkflowDefinition) -> str:
+        if not definition.workflow_id.strip():
+            raise RuntimeError("Workflow ID is required.")
+        if not definition.title.strip():
+            raise RuntimeError("Workflow title is required.")
+        if not definition.steps:
+            raise RuntimeError("Add at least one workflow step.")
+        if self._workflow_catalog.get(definition.workflow_id) is not None:
+            raise RuntimeError(f"Workflow {definition.workflow_id!r} already exists.")
+
+        seen_step_ids: set[str] = set()
+        for step in definition.steps:
+            if not step.step_id.strip():
+                raise RuntimeError("Each workflow step needs an ID.")
+            if step.step_id in seen_step_ids:
+                raise RuntimeError(f"Duplicate workflow step ID {step.step_id!r}.")
+            if not step.title.strip():
+                raise RuntimeError(f"Workflow step {step.step_id!r} is missing a title.")
+            if not step.instruction.strip():
+                raise RuntimeError(f"Workflow step {step.step_id!r} is missing instructions.")
+            seen_step_ids.add(step.step_id)
+
+        self._workflow_directory.mkdir(parents=True, exist_ok=True)
+        path = self._workflow_directory / f"{definition.workflow_id}.json"
+        if path.exists():
+            raise RuntimeError(f"Workflow file already exists: {path.name}")
+
+        path.write_text(
+            json.dumps(_workflow_definition_payload(definition), indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        self._workflow_catalog = load_workflow_catalog(
+            self._workflow_directory,
+            extra_paths=self._workflow_extra_paths,
+        )
+        with self._lock:
+            self._workflow = replace(
+                self._workflow,
+                selected_workflow_id=definition.workflow_id,
+                selected_run_id=None,
+            )
+        self._workflow_status_message = f"Created workflow {definition.title}."
+        self.refresh_workflows()
+        return str(path)
 
     def complete_workflow_step(self, note: str | None = None) -> str:
         current = self._workflow_runner.active_state()
@@ -1884,3 +1943,42 @@ def _latest_capture_text(results: tuple[WorkflowStepResult, ...] | list[Workflow
         last = list(results)[-1]
         return f"Last step: {last.step_id} ({last.status.value})"
     return "No captured step yet"
+
+
+def _workflow_definition_payload(definition: WorkflowDefinition) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "workflow_id": definition.workflow_id,
+        "title": definition.title,
+        "description": definition.description,
+        "category": definition.category,
+        "tags": list(definition.tags),
+        "steps": [],
+    }
+    if definition.estimated_duration_min is not None:
+        payload["estimated_duration_min"] = definition.estimated_duration_min
+
+    step_payloads: list[dict[str, object]] = []
+    for step in definition.steps:
+        row: dict[str, object] = {
+            "id": step.step_id,
+            "title": step.title,
+            "instruction": step.instruction,
+            "capture": step.capture,
+        }
+        if step.expected_measurement_type is not None:
+            row["expected_measurement_type"] = _measurement_type_value(step.expected_measurement_type)
+        if step.expected_unit:
+            row["expected_unit"] = step.expected_unit
+        if step.note_prompt:
+            row["note_prompt"] = step.note_prompt
+        if step.metadata:
+            row["metadata"] = dict(step.metadata)
+        step_payloads.append(row)
+    payload["steps"] = step_payloads
+    return payload
+
+
+def _measurement_type_value(value: MeasurementType | str) -> str:
+    if isinstance(value, MeasurementType):
+        return value.value
+    return str(value)

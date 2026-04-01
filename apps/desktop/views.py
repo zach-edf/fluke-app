@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from apps.desktop._qt import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -20,6 +24,7 @@ from apps.desktop._qt import (
     QPushButton,
     QScrollArea,
     QShortcut,
+    QSpinBox,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -30,12 +35,24 @@ from apps.desktop._qt import (
     Qt,
 )
 from apps.desktop.widgets import build_reading_chart
+from fluke_core.enums import MeasurementType
+from fluke_core.models.workflow import WorkflowDefinition, WorkflowStep
 
 
 @dataclass(slots=True)
 class _PanelRefs:
     panel: object
     refs: dict[str, object]
+
+
+@dataclass(slots=True)
+class _WorkflowStepDraft:
+    title: str = ""
+    instruction: str = ""
+    capture: bool = False
+    expected_measurement_type: MeasurementType | None = None
+    expected_unit: str = ""
+    note_prompt: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +162,341 @@ def _info(parent: QWidget, title: str, message: str) -> None:
     QMessageBox.information(parent, title, message)
 
 
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.strip().lower())
+    return slug.strip("_")
+
+
+def _measurement_options() -> list[tuple[str, MeasurementType | None]]:
+    return [("Any measurement", None)] + [
+        (measurement.value.replace("_", " ").title(), measurement)
+        for measurement in MeasurementType
+        if measurement is not MeasurementType.UNKNOWN
+    ]
+
+
+def _coerce_measurement_type(value: object) -> MeasurementType | None:
+    if value in {None, ""}:
+        return None
+    if isinstance(value, MeasurementType):
+        return value
+    return MeasurementType(str(value))
+
+
+class _WorkflowBuilderDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Create Workflow")
+        self.resize(980, 720)
+
+        self._step_drafts: list[_WorkflowStepDraft] = []
+        self._workflow_id_dirty = False
+
+        root = QVBoxLayout(self)
+
+        form = QFormLayout()
+        self._workflow_id = QLineEdit()
+        self._workflow_id.setPlaceholderText("workflow_id")
+        self._title = QLineEdit()
+        self._title.setPlaceholderText("Solar Panel Test")
+        self._description = QTextEdit()
+        self._description.setFixedHeight(90)
+        self._description.setPlaceholderText("Describe what this workflow guides the user through.")
+        self._category = QLineEdit()
+        self._category.setPlaceholderText("General")
+        self._tags = QLineEdit()
+        self._tags.setPlaceholderText("comma, separated, tags")
+        self._duration = QSpinBox()
+        self._duration.setRange(0, 1440)
+        self._duration.setSpecialValueText("Unknown")
+        self._duration.setSuffix(" min")
+        form.addRow("Workflow ID", self._workflow_id)
+        form.addRow("Title", self._title)
+        form.addRow("Description", self._description)
+        form.addRow("Category", self._category)
+        form.addRow("Tags", self._tags)
+        form.addRow("Estimated Duration", self._duration)
+        root.addLayout(form)
+
+        content = QHBoxLayout()
+
+        step_column = QVBoxLayout()
+        step_header = QLabel("Steps")
+        step_header.setObjectName("section_header")
+        step_column.addWidget(step_header)
+        self._step_list = QListWidget()
+        step_column.addWidget(self._step_list)
+
+        step_actions = QHBoxLayout()
+        self._add_step_button = QPushButton("Add Step")
+        self._remove_step_button = QPushButton("Remove Step")
+        self._move_up_button = QPushButton("Move Up")
+        self._move_down_button = QPushButton("Move Down")
+        for button in (
+            self._add_step_button,
+            self._remove_step_button,
+            self._move_up_button,
+            self._move_down_button,
+        ):
+            step_actions.addWidget(button)
+        step_column.addLayout(step_actions)
+
+        editor_column = QVBoxLayout()
+        editor_header = QLabel("Step Details")
+        editor_header.setObjectName("section_header")
+        editor_column.addWidget(editor_header)
+
+        editor_form = QFormLayout()
+        self._step_title = QLineEdit()
+        self._step_title.setPlaceholderText("Measure Open-Circuit Voltage")
+        self._step_instruction = QTextEdit()
+        self._step_instruction.setFixedHeight(120)
+        self._step_instruction.setPlaceholderText("Explain exactly what the user should do.")
+        self._step_capture = QCheckBox("This step captures a meter reading")
+        self._step_capture.setToolTip("Check this box to enable measurement type and expected unit for this step.")
+        self._step_measurement = QComboBox()
+        for label, value in _measurement_options():
+            self._step_measurement.addItem(label, value)
+        self._step_measurement.setToolTip("Available when this step is configured to capture a reading.")
+        self._step_unit = QLineEdit()
+        self._step_unit.setPlaceholderText("V")
+        self._step_unit.setToolTip("Available when this step is configured to capture a reading.")
+        self._step_note_prompt = QLineEdit()
+        self._step_note_prompt.setPlaceholderText("Optional note prompt shown to the operator")
+        editor_form.addRow("Title", self._step_title)
+        editor_form.addRow("Instruction", self._step_instruction)
+        editor_form.addRow("", self._step_capture)
+        editor_form.addRow("Measurement Type", self._step_measurement)
+        editor_form.addRow("Expected Unit", self._step_unit)
+        editor_form.addRow("Note Prompt", self._step_note_prompt)
+        editor_column.addLayout(editor_form)
+        editor_column.addStretch()
+
+        content.addLayout(step_column, 2)
+        content.addLayout(editor_column, 3)
+        root.addLayout(content)
+
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        save_button = self._buttons.button(QDialogButtonBox.StandardButton.Save)
+        if save_button is not None:
+            save_button.setText("Create Workflow")
+            save_button.setObjectName("primary_button")
+        cancel_button = self._buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_button is not None:
+            cancel_button.setText("Cancel")
+        root.addWidget(self._buttons)
+
+        self._title.textChanged.connect(self._sync_workflow_id_from_title)
+        self._workflow_id.textEdited.connect(self._mark_workflow_id_dirty)
+        self._step_list.currentRowChanged.connect(self._load_current_step)
+        self._step_capture.toggled.connect(self._update_capture_fields)
+        self._step_title.textChanged.connect(self._sync_current_step_fields)
+        self._step_instruction.textChanged.connect(self._sync_current_step_fields)
+        self._step_capture.toggled.connect(self._sync_current_step_fields)
+        self._step_measurement.currentIndexChanged.connect(self._sync_current_step_fields)
+        self._step_unit.textChanged.connect(self._sync_current_step_fields)
+        self._step_note_prompt.textChanged.connect(self._sync_current_step_fields)
+        self._add_step_button.clicked.connect(self._add_step)
+        self._remove_step_button.clicked.connect(self._remove_current_step)
+        self._move_up_button.clicked.connect(self._move_current_step_up)
+        self._move_down_button.clicked.connect(self._move_current_step_down)
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+
+        self._add_step()
+        self._update_capture_fields()
+
+    def accept(self) -> None:
+        try:
+            self.workflow_definition()
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid Workflow", str(exc))
+            return
+        super().accept()
+
+    def workflow_definition(self) -> WorkflowDefinition:
+        self._store_current_step()
+
+        workflow_id = _slugify(self._workflow_id.text())
+        if not workflow_id:
+            raise RuntimeError("Enter a workflow ID.")
+
+        title = self._title.text().strip()
+        if not title:
+            raise RuntimeError("Enter a workflow title.")
+
+        category = self._category.text().strip() or "General"
+        description = self._description.toPlainText().strip()
+        tags = tuple(tag.strip() for tag in self._tags.text().split(",") if tag.strip())
+        duration = self._duration.value() or None
+        if not self._step_drafts:
+            raise RuntimeError("Add at least one workflow step.")
+
+        steps: list[WorkflowStep] = []
+        used_step_ids: set[str] = set()
+        for index, draft in enumerate(self._step_drafts, start=1):
+            step_title = draft.title.strip()
+            if not step_title:
+                raise RuntimeError(f"Step {index} is missing a title.")
+            instruction = draft.instruction.strip()
+            if not instruction:
+                raise RuntimeError(f"Step {index} is missing instructions.")
+
+            base_step_id = _slugify(step_title) or f"step_{index}"
+            step_id = base_step_id
+            suffix = 2
+            while step_id in used_step_ids:
+                step_id = f"{base_step_id}_{suffix}"
+                suffix += 1
+            used_step_ids.add(step_id)
+
+            steps.append(
+                WorkflowStep(
+                    step_id=step_id,
+                    title=step_title,
+                    instruction=instruction,
+                    capture=draft.capture,
+                    expected_measurement_type=draft.expected_measurement_type if draft.capture else None,
+                    expected_unit=_text_or_none(draft.expected_unit) if draft.capture else None,
+                    note_prompt=_text_or_none(draft.note_prompt),
+                )
+            )
+
+        return WorkflowDefinition(
+            workflow_id=workflow_id,
+            title=title,
+            description=description,
+            category=category,
+            estimated_duration_min=duration,
+            tags=tags,
+            steps=tuple(steps),
+        )
+
+    def _mark_workflow_id_dirty(self) -> None:
+        self._workflow_id_dirty = True
+
+    def _sync_workflow_id_from_title(self, text: str) -> None:
+        if self._workflow_id_dirty:
+            return
+        suggestion = _slugify(text)
+        self._workflow_id.setText("" if not suggestion else f"{suggestion}_v1")
+
+    def _current_step_index(self) -> int:
+        return self._step_list.currentRow()
+
+    def _store_current_step(self) -> None:
+        self._sync_current_step_fields()
+
+    def _sync_current_step_fields(self) -> None:
+        index = self._current_step_index()
+        if not (0 <= index < len(self._step_drafts)):
+            return
+        self._step_drafts[index] = _WorkflowStepDraft(
+            title=self._step_title.text().strip(),
+            instruction=self._step_instruction.toPlainText().strip(),
+            capture=self._step_capture.isChecked(),
+            expected_measurement_type=_coerce_measurement_type(self._step_measurement.currentData()),
+            expected_unit=self._step_unit.text().strip(),
+            note_prompt=self._step_note_prompt.text().strip(),
+        )
+        self._refresh_step_list_labels()
+
+    def _load_current_step(self, index: int) -> None:
+        if not (0 <= index < len(self._step_drafts)):
+            self._set_step_editor_enabled(False)
+            return
+        draft = self._step_drafts[index]
+        self._set_step_editor_enabled(True)
+        self._step_title.setText(draft.title)
+        self._step_instruction.setPlainText(draft.instruction)
+        self._step_capture.setChecked(draft.capture)
+        measurement_index = self._step_measurement.findData(draft.expected_measurement_type)
+        self._step_measurement.setCurrentIndex(0 if measurement_index < 0 else measurement_index)
+        self._step_unit.setText(draft.expected_unit)
+        self._step_note_prompt.setText(draft.note_prompt)
+        self._update_capture_fields()
+        self._refresh_step_action_state()
+
+    def _set_step_editor_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self._step_title,
+            self._step_instruction,
+            self._step_capture,
+            self._step_measurement,
+            self._step_unit,
+            self._step_note_prompt,
+        ):
+            widget.setEnabled(enabled)
+        self._refresh_step_action_state()
+
+    def _refresh_step_action_state(self) -> None:
+        index = self._current_step_index()
+        has_selection = 0 <= index < len(self._step_drafts)
+        self._remove_step_button.setEnabled(len(self._step_drafts) > 1 and has_selection)
+        self._move_up_button.setEnabled(has_selection and index > 0)
+        self._move_down_button.setEnabled(has_selection and index < len(self._step_drafts) - 1)
+
+    def _refresh_step_list_labels(self) -> None:
+        current_row = self._current_step_index()
+        self._step_list.blockSignals(True)
+        try:
+            self._step_list.clear()
+            for index, draft in enumerate(self._step_drafts, start=1):
+                label = draft.title or f"Step {index}"
+                if draft.capture:
+                    label = f"{label} [capture]"
+                self._step_list.addItem(label)
+            if self._step_drafts:
+                next_row = min(max(current_row, 0), len(self._step_drafts) - 1)
+                self._step_list.setCurrentRow(next_row)
+        finally:
+            self._step_list.blockSignals(False)
+        self._refresh_step_action_state()
+
+    def _add_step(self) -> None:
+        self._store_current_step()
+        next_index = len(self._step_drafts) + 1
+        self._step_drafts.append(_WorkflowStepDraft(title=f"Step {next_index}"))
+        self._refresh_step_list_labels()
+        self._step_list.setCurrentRow(len(self._step_drafts) - 1)
+
+    def _remove_current_step(self) -> None:
+        index = self._current_step_index()
+        if not (0 <= index < len(self._step_drafts)):
+            return
+        del self._step_drafts[index]
+        self._refresh_step_list_labels()
+        if self._step_drafts:
+            next_index = min(index, len(self._step_drafts) - 1)
+            self._step_list.setCurrentRow(next_index)
+            self._load_current_step(next_index)
+
+    def _move_current_step_up(self) -> None:
+        index = self._current_step_index()
+        if index <= 0:
+            return
+        self._store_current_step()
+        self._step_drafts[index - 1], self._step_drafts[index] = self._step_drafts[index], self._step_drafts[index - 1]
+        self._refresh_step_list_labels()
+        self._step_list.setCurrentRow(index - 1)
+
+    def _move_current_step_down(self) -> None:
+        index = self._current_step_index()
+        if not (0 <= index < len(self._step_drafts) - 1):
+            return
+        self._store_current_step()
+        self._step_drafts[index + 1], self._step_drafts[index] = self._step_drafts[index], self._step_drafts[index + 1]
+        self._refresh_step_list_labels()
+        self._step_list.setCurrentRow(index + 1)
+
+    def _update_capture_fields(self) -> None:
+        enabled = self._step_capture.isChecked()
+        self._step_measurement.setEnabled(enabled)
+        self._step_unit.setEnabled(enabled)
+
+
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
@@ -195,7 +547,7 @@ def create_main_window(runtime) -> QWidget:
             self._sb_session = QLabel("No active session")
             self._sb_reading = QLabel("Last reading: -")
             for lbl in (self._sb_connection, self._sb_session, self._sb_reading):
-                lbl.setStyleSheet("font-size: 11px; color: #4b5b57;")
+                lbl.setStyleSheet("font-size: 11px; color: #6B7280;")
             status_row.addWidget(self._sb_connection, 1)
             status_row.addWidget(self._sb_session, 1)
             status_row.addWidget(self._sb_reading, 1)
@@ -268,7 +620,7 @@ def _home_panel(window: QWidget, runtime) -> _PanelRefs:
     subtitle = QLabel()
     connection_dot = QLabel("\u2B24")
     connection_dot.setFixedWidth(18)
-    connection_dot.setStyleSheet("color: #a0afa8; font-size: 11px;")
+    connection_dot.setStyleSheet("color: #9CA3AF; font-size: 11px;")
     connection = QLabel()
     connection_row = QHBoxLayout()
     connection_row.setContentsMargins(0, 0, 0, 0)
@@ -371,7 +723,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     status = QLabel()
     connection_dot = QLabel("\u2B24")
     connection_dot.setFixedWidth(18)
-    connection_dot.setStyleSheet("color: #a0afa8; font-size: 11px;")
+    connection_dot.setStyleSheet("color: #9CA3AF; font-size: 11px;")
     connection = QLabel()
     connection_row = QHBoxLayout()
     connection_row.setContentsMargins(0, 0, 0, 0)
@@ -547,6 +899,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     notes = QTextEdit()
     notes.setReadOnly(True)
     notes.setFixedHeight(90)
+    notes.setPlaceholderText("No notes recorded for this session.")
     chart = build_reading_chart(
         title="Session Replay",
         empty_text="Select a recorded session to inspect its replay chart and markers.",
@@ -673,14 +1026,32 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
     theme_combo = QComboBox()
     theme_combo.addItem("Light", "light")
     theme_combo.addItem("Dark", "dark")
-    theme_combo.setToolTip("Switch between light and dark UI themes")
+    theme_combo.addItem("Fluke", "fluke")
+    theme_combo.setToolTip("Switch UI theme")
 
     def _on_theme_changed(index: int) -> None:
-        from apps.desktop.theme import STYLESHEET, DARK_STYLESHEET
+        import apps.desktop.theme as _theme
         theme_id = theme_combo.itemData(index)
+        entry = _theme.THEMES.get(theme_id, _theme.THEMES["light"])
+        _theme.active_theme = theme_id
         app_instance = QApplication.instance()
         if app_instance is not None:
-            app_instance.setStyleSheet(DARK_STYLESHEET if theme_id == "dark" else STYLESHEET)
+            app_instance.setStyleSheet(entry["stylesheet"])
+        # Update chart colors for all chart widgets stored in panel refs
+        main = window
+        for panel_attr in ("_live", "_session"):
+            panel_refs = getattr(main, panel_attr, None)
+            if panel_refs is None:
+                continue
+            chart = panel_refs.refs.get("chart")
+            if chart is not None and hasattr(chart, "apply_theme"):
+                chart.apply_theme(entry)
+        # Update status bar label colors
+        sb_color = entry.get("status_bar_text", "#6B7280")
+        for sb_attr in ("_sb_connection", "_sb_session", "_sb_reading"):
+            lbl = getattr(main, sb_attr, None)
+            if lbl is not None:
+                lbl.setStyleSheet(f"font-size: 11px; color: {sb_color};")
 
     theme_combo.currentIndexChanged.connect(_on_theme_changed)
 
@@ -734,6 +1105,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     start_button = QPushButton("Start Workflow")
     start_button.setObjectName("primary_button")
     start_button.setToolTip("Start the selected workflow")
+    new_workflow_button = QPushButton("New Workflow")
+    new_workflow_button.setToolTip("Create a new workflow definition from the desktop app")
     complete_button = QPushButton("Complete Step")
     complete_button.setToolTip("Complete the current workflow step and capture reading")
     skip_button = QPushButton("Skip Step")
@@ -754,6 +1127,7 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     workflow_list.itemSelectionChanged.connect(on_selection_changed)
     recent_runs.itemSelectionChanged.connect(on_recent_run_changed)
     start_button.clicked.connect(lambda: _safe_call(runtime, lambda: runtime.presenter.start_workflow()))
+    new_workflow_button.clicked.connect(lambda: _open_workflow_builder(window, runtime))
     complete_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: _complete_workflow_step(runtime, note_input))
     )
@@ -779,6 +1153,7 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     left.addWidget(wf_header)
     left.addWidget(workflow_list)
     left.addWidget(start_button)
+    left.addWidget(new_workflow_button)
 
     actions = QHBoxLayout()
     actions.addWidget(complete_button)
@@ -822,7 +1197,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
             "selected_run": selected_run, "report_view": report_view,
             "note_input": note_input, "completed_steps": completed_steps,
             "recent_runs": recent_runs,
-            "start_button": start_button, "complete_button": complete_button,
+            "start_button": start_button, "new_workflow_button": new_workflow_button,
+            "complete_button": complete_button,
             "skip_button": skip_button, "cancel_button": cancel_button,
             "export_report_button": export_report_button,
             "list_item_cls": QListWidgetItem,
@@ -835,19 +1211,19 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
 # ---------------------------------------------------------------------------
 
 _HEALTH_COLORS = {
-    "connecting": "#3b7f9a",
-    "streaming": "#0b7a6b",
-    "connected": "#ce6a06",
-    "reconnecting": "#8a5a00",
-    "stale": "#ce6a06",
-    "disconnected": "#a83232",
-    "error": "#a83232",
-    "idle": "#a0afa8",
+    "connecting": "#3B82F6",
+    "streaming": "#16A34A",
+    "connected": "#D97706",
+    "reconnecting": "#D97706",
+    "stale": "#D97706",
+    "disconnected": "#DC2626",
+    "error": "#DC2626",
+    "idle": "#9CA3AF",
 }
 
 
 def _update_connection_dot(dot_label, health: str) -> None:
-    color = _HEALTH_COLORS.get(health, "#a0afa8")
+    color = _HEALTH_COLORS.get(health, "#9CA3AF")
     dot_label.setStyleSheet(f"color: {color}; font-size: 11px;")
 
 
@@ -963,10 +1339,19 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     if notes.toPlainText() != session.selected_session_notes:
         notes.setPlainText(session.selected_session_notes)
 
-    _sync_table_rows(
-        panel.refs["markers_table"],
-        [(m.marker_id, [m.timestamp_text, m.label, m.note]) for m in session.selected_markers],
-    )
+    markers_table = panel.refs["markers_table"]
+    marker_rows = [(m.marker_id, [m.timestamp_text, m.label, m.note]) for m in session.selected_markers]
+    if marker_rows:
+        markers_table.clearSpans()
+        _sync_table_rows(markers_table, marker_rows)
+    else:
+        markers_table.clearSpans()
+        markers_table.clearContents()
+        markers_table.setRowCount(1)
+        placeholder_item = QTableWidgetItem("No markers recorded for this session.")
+        placeholder_item.setFlags(Qt.ItemFlag.NoItemFlags)
+        markers_table.setItem(0, 0, placeholder_item)
+        markers_table.setSpan(0, 0, 1, markers_table.columnCount())
     _sync_combo_rows(
         panel.refs["context_filter"],
         [(None, "All Measurements")] + [(ctx.context_id, ctx.display_text) for ctx in session.available_contexts],
@@ -1120,6 +1505,19 @@ def _confirm_and_disconnect(window: QWidget, runtime) -> None:
 def _confirm_and_cancel_workflow(window: QWidget, runtime) -> None:
     if _confirm(window, "Cancel Workflow", "Cancel the running workflow?"):
         _safe_call(runtime, runtime.presenter.cancel_workflow)
+
+
+def _open_workflow_builder(window: QWidget, runtime) -> None:
+    dialog = _WorkflowBuilderDialog(window)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return
+    try:
+        definition = dialog.workflow_definition()
+        exported = runtime.presenter.create_workflow(definition)
+        _info(window, "Workflow Created", f"Workflow saved to:\n{exported}")
+    except Exception as exc:
+        runtime.presenter.report_error(str(exc))
+        QMessageBox.warning(window, "Workflow Save Failed", str(exc))
 
 
 def _export_chart_with_dialog(window: QWidget, runtime, chart, path: Path) -> None:
