@@ -9,6 +9,8 @@ This project is intentionally structured so protocol work, app workflows, deskto
 - Prefer hardware-free tests with fake adapters and recorded fixtures.
 - Treat the legacy `fluke_ble.py` prototype as reference material, not the target architecture.
 
+Start with the contributor docs hub at [docs/developer/README.md](docs/developer/README.md) for the fuller development workflow and testing guides.
+
 ## Local Setup
 
 Windows PowerShell:

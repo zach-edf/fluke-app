@@ -14,6 +14,8 @@ The project started from a single reverse-engineered prototype in `fluke_ble.py`
 
 The current in-tree device focus is still the Fluke 376 FC.
 
+For a structured documentation set instead of this high-level overview, start with [docs/README.md](docs/README.md).
+
 ## Project Status
 
 What exists now:
@@ -72,7 +74,14 @@ scripts/
   fixture_capture.py    Raw fixture capture helper
   export_debug_bundle.py
 docs/
+  README.md               Documentation hub
   architecture.md
+  getting-started.md
+  desktop-guide.md
+  cli-guide.md
+  data-and-exports.md
+  sdk-guide.md
+  workflows-page.md
   support-matrix.md
   developer/
 ```
@@ -482,6 +491,17 @@ Prefer the shared stack unless you are specifically mining the legacy script for
 
 ## Documentation Index
 
+- [docs/README.md](docs/README.md)
+- [docs/getting-started.md](docs/getting-started.md)
+- [docs/desktop-guide.md](docs/desktop-guide.md)
+- [docs/cli-guide.md](docs/cli-guide.md)
+- [docs/data-and-exports.md](docs/data-and-exports.md)
+- [docs/sdk-guide.md](docs/sdk-guide.md)
+- [docs/workflows-page.md](docs/workflows-page.md)
+- [docs/developer/README.md](docs/developer/README.md)
+- [docs/developer/development-workflow.md](docs/developer/development-workflow.md)
+- [docs/developer/testing-guide.md](docs/developer/testing-guide.md)
+- [docs/developer/desktop-ui-architecture.md](docs/developer/desktop-ui-architecture.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/support-matrix.md](docs/support-matrix.md)
 - [docs/developer/new-device-profile.md](docs/developer/new-device-profile.md)
