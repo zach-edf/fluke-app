@@ -7,7 +7,7 @@ from fluke_app.ports import WorkflowRunRepository, WorkflowStepResultRepository
 from fluke_app.workflow_catalog import WorkflowCatalog
 from fluke_core.enums import WorkflowRunResult, WorkflowStepResultStatus
 from fluke_core.models.reading import Reading
-from fluke_core.models.workflow import WorkflowRun, WorkflowRunState, WorkflowStepResult
+from fluke_core.models.workflow import WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
 
 
 class WorkflowRunner:
@@ -71,19 +71,8 @@ class WorkflowRunner:
 
         reading = None
         status = WorkflowStepResultStatus.COMPLETED
-        if step.capture:
-            if latest_reading is None:
-                raise RuntimeError("A live reading is required to capture this workflow step.")
-            if (
-                step.expected_measurement_type is not None
-                and latest_reading.measurement_type != step.expected_measurement_type
-            ):
-                raise RuntimeError(
-                    f"Expected {step.expected_measurement_type.value} but received {latest_reading.measurement_type.value}."
-                )
-            if step.expected_unit is not None and latest_reading.unit != step.expected_unit:
-                raise RuntimeError(f"Expected unit {step.expected_unit!r} but received {latest_reading.unit!r}.")
-            reading = latest_reading
+        if step.requires_reading:
+            reading = self.validate_reading_for_step(step, latest_reading)
             status = WorkflowStepResultStatus.CAPTURED
 
         result = WorkflowStepResult(
@@ -131,6 +120,20 @@ class WorkflowRunner:
 
     def results_for_run(self, run_id: str) -> list[WorkflowStepResult]:
         return self._step_result_repo.list_for_run(run_id)
+
+    def validate_reading_for_step(self, step: WorkflowStep, latest_reading: Reading | None) -> Reading:
+        if latest_reading is None:
+            raise RuntimeError("A live reading is required to capture this workflow step.")
+        if (
+            step.expected_measurement_type is not None
+            and latest_reading.measurement_type != step.expected_measurement_type
+        ):
+            raise RuntimeError(
+                f"Expected {step.expected_measurement_type.value} but received {latest_reading.measurement_type.value}."
+            )
+        if step.expected_unit is not None and latest_reading.unit != step.expected_unit:
+            raise RuntimeError(f"Expected unit {step.expected_unit!r} but received {latest_reading.unit!r}.")
+        return latest_reading
 
     def _require_active_state(self) -> WorkflowRunState:
         state = self.active_state()

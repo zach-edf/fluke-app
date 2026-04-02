@@ -44,6 +44,13 @@ class SessionContextViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionSegmentViewModel:
+    segment_id: str
+    label: str
+    display_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class SessionCompareViewModel:
     session_id: str
     label: str
@@ -97,6 +104,9 @@ class LiveReadingViewModel:
     alert_active: bool = False
     alert_message: str = ""
     alert_event_id: int = 0
+    selected_chart_mode: str = "rolling_30s"
+    chart_x_mode: str = "elapsed"
+    chart_x_title: str = "Seconds"
     chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
 
@@ -131,6 +141,8 @@ class SessionViewModel:
     selected_session_id: str | None = None
     selected_context_id: str | None = None
     selected_context_label: str = ""
+    selected_axis_mode: str = "elapsed"
+    selected_segment_id: str | None = None
     compare_session_id: str | None = None
     compare_session_label: str = ""
     active_title_text: str = "No active session"
@@ -139,11 +151,14 @@ class SessionViewModel:
     database_path_text: str = ""
     recent_sessions: tuple[SessionSummaryViewModel, ...] = ()
     available_contexts: tuple[SessionContextViewModel, ...] = ()
+    available_segments: tuple[SessionSegmentViewModel, ...] = ()
     available_compare_sessions: tuple[SessionCompareViewModel, ...] = ()
     selected_summary_text: str = "Min - | Max - | Avg -"
     compare_summary_text: str = ""
     selected_unit_text: str = ""
     selected_session_notes: str = ""
+    chart_x_mode: str = "elapsed"
+    chart_x_title: str = "Seconds"
     selected_markers: tuple[SessionMarkerViewModel, ...] = ()
     chart_points: tuple[tuple[float, float], ...] = ()
     compare_chart_points: tuple[tuple[float, float], ...] = ()
@@ -170,11 +185,17 @@ class WorkflowViewModel:
     current_step_title: str = "No active step"
     current_instruction_text: str = ""
     current_requirement_text: str = ""
+    current_interaction_mode_text: str = ""
+    capture_state_text: str = ""
+    capture_hint_text: str = ""
     active_session_text: str = "No workflow session"
     latest_capture_text: str = "No captured step yet"
     run_result_text: str = ""
     selected_run_summary_text: str = "No workflow run selected"
     report_text: str = ""
     is_running: bool = False
+    primary_action_text: str = "Complete Step"
+    can_continue_capture: bool = False
+    can_retake_capture: bool = False
     completed_steps: tuple[WorkflowStepViewModel, ...] = ()
     recent_runs: tuple[WorkflowRunSummaryViewModel, ...] = ()

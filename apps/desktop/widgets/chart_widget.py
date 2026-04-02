@@ -13,7 +13,8 @@ class ReadingChartWidget:
     _line_series: object
     _comparison_series: object
     _marker_series: object
-    _axis_x: object
+    _axis_x_value: object
+    _axis_x_time: object
     _axis_y: object
     _title: str
     _empty_text: str
@@ -25,6 +26,8 @@ class ReadingChartWidget:
         *,
         unit_text: str = "",
         measurement_label: str = "Reading",
+        x_axis_mode: str = "elapsed",
+        x_axis_title: str = "Seconds",
         comparison_points: tuple[tuple[float, float], ...] | list[tuple[float, float]] = (),
         comparison_label: str = "Comparison",
     ) -> None:
@@ -36,9 +39,10 @@ class ReadingChartWidget:
             self._line_series.clear()
             self._comparison_series.clear()
             self._marker_series.clear()
-            self._axis_x.setRange(0.0, 1.0)
+            self._axis_x_value.setRange(0.0, 1.0)
             self._axis_y.setRange(0.0, 1.0)
             self._axis_y.setTitleText(unit_text or "Value")
+            self._axis_x_value.setTitleText(x_axis_title)
             self._chart.setTitle(self._title)
             self._chart.legend().hide()
             self._placeholder.setText(self._empty_text)
@@ -80,12 +84,40 @@ class ReadingChartWidget:
         y_label = unit_text or "Value"
         title = self._title if not measurement_label or measurement_label == "Idle" else f"{self._title} - {measurement_label}"
         self._chart.setTitle(title)
-        self._axis_x.setRange(min(0.0, min_x), max_x)
+        self._apply_x_axis(x_axis_mode, x_axis_title, min_x, max_x)
         self._axis_y.setRange(min_y, max_y)
         self._axis_y.setTitleText(y_label)
         self._chart.legend().setVisible(bool(comparison_series_points))
         self._placeholder.hide()
         self._view.show()
+
+    def _apply_x_axis(self, x_axis_mode: str, x_axis_title: str, min_x: float, max_x: float) -> None:
+        from PySide6.QtCore import QDateTime
+
+        use_time_axis = x_axis_mode == "datetime"
+        self._axis_x_value.setVisible(not use_time_axis)
+        self._axis_x_time.setVisible(use_time_axis)
+        self._axis_x_value.setTitleText(x_axis_title)
+        self._axis_x_time.setTitleText(x_axis_title)
+        for series in (self._line_series, self._comparison_series, self._marker_series):
+            try:
+                series.detachAxis(self._axis_x_value)
+            except Exception:
+                pass
+            try:
+                series.detachAxis(self._axis_x_time)
+            except Exception:
+                pass
+            series.attachAxis(self._axis_x_time if use_time_axis else self._axis_x_value)
+        if use_time_axis:
+            if min_x == max_x:
+                max_x = min_x + 1000.0
+            self._axis_x_time.setRange(
+                QDateTime.fromMSecsSinceEpoch(int(min_x)),
+                QDateTime.fromMSecsSinceEpoch(int(max_x)),
+            )
+        else:
+            self._axis_x_value.setRange(min(0.0, min_x), max_x)
 
     def apply_theme(self, theme_colors: dict[str, str]) -> None:
         """Update chart colors to match the active theme."""
@@ -127,7 +159,7 @@ class ReadingChartWidget:
         # Axes
         axis_brush = QColor(axis_label)
         grid_pen = QPen(QColor(grid))
-        for axis in (self._axis_x, self._axis_y):
+        for axis in (self._axis_x_value, self._axis_x_time, self._axis_y):
             axis.setLabelsColor(axis_brush)
             axis.setTitleBrush(axis_brush)
             axis.setGridLinePen(grid_pen)
@@ -165,7 +197,7 @@ def build_reading_chart(
     minimum_height: int = 260,
 ) -> ReadingChartWidget:
     try:
-        from PySide6.QtCharts import QChart, QChartView, QLineSeries, QScatterSeries, QValueAxis
+        from PySide6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QScatterSeries, QValueAxis
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QColor, QPainter, QPen
         from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
@@ -215,14 +247,20 @@ def build_reading_chart(
     marker_series.setBorderColor(QColor(colors["chart_marker_border"]))
     chart.addSeries(marker_series)
 
-    axis_x = QValueAxis()
-    axis_x.setTitleText("Seconds")
-    axis_x.setLabelFormat("%.1f")
-    axis_x.setRange(0.0, 1.0)
-    chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
-    line_series.attachAxis(axis_x)
-    comparison_series.attachAxis(axis_x)
-    marker_series.attachAxis(axis_x)
+    axis_x_value = QValueAxis()
+    axis_x_value.setTitleText("Seconds")
+    axis_x_value.setLabelFormat("%.1f")
+    axis_x_value.setRange(0.0, 1.0)
+    chart.addAxis(axis_x_value, Qt.AlignmentFlag.AlignBottom)
+    line_series.attachAxis(axis_x_value)
+    comparison_series.attachAxis(axis_x_value)
+    marker_series.attachAxis(axis_x_value)
+
+    axis_x_time = QDateTimeAxis()
+    axis_x_time.setTitleText("UTC")
+    axis_x_time.setFormat("HH:mm:ss")
+    axis_x_time.setVisible(False)
+    chart.addAxis(axis_x_time, Qt.AlignmentFlag.AlignBottom)
 
     axis_y = QValueAxis()
     axis_y.setTitleText("Value")
@@ -249,7 +287,8 @@ def build_reading_chart(
         _line_series=line_series,
         _comparison_series=comparison_series,
         _marker_series=marker_series,
-        _axis_x=axis_x,
+        _axis_x_value=axis_x_value,
+        _axis_x_time=axis_x_time,
         _axis_y=axis_y,
         _title=title,
         _empty_text=empty_text,

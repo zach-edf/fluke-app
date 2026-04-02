@@ -50,3 +50,10 @@ class WorkflowStepResultStatus(str, Enum):
     COMPLETED = "completed"
     CAPTURED = "captured"
     SKIPPED = "skipped"
+
+
+class WorkflowInteractionMode(str, Enum):
+    MANUAL_CHECK = "manual_check"
+    STABLE_CAPTURE = "stable_capture"
+    COUNTDOWN_CAPTURE = "countdown_capture"
+    OBSERVE_AND_CONFIRM = "observe_and_confirm"

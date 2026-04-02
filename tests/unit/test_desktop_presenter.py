@@ -11,7 +11,11 @@ from tests.unit._helpers import measurement_payload
 
 from apps.desktop.presenters import AppPresenter
 from fluke_app import DeviceManager
+from fluke_app.workflow_catalog import WorkflowCatalog
 from fluke_ble.adapter import BleDevice
+from fluke_core.enums import MeasurementType, ReadingStatus, WorkflowInteractionMode
+from fluke_core.models.reading import Reading
+from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefinition, WorkflowStep
 from fluke_protocol import ProfileRegistry
 from fluke_protocol.profiles.fluke_376fc import FLUKE_MEAS_UUID, FLUKE_STATUS_UUID, Fluke376FCProfile
 from fluke_store import FlukeStore
@@ -795,6 +799,166 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Compared with Comparison Session", session_vm.compare_summary_text)
         finally:
             store.close()
+
+    async def test_presenter_stable_capture_supports_retake_and_continue(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-stable-capture.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-stable-capture",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:AB",
+                    rssi=-47,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        catalog = WorkflowCatalog(
+            [
+                WorkflowDefinition(
+                    workflow_id="stable_capture_only",
+                    title="Stable Capture Only",
+                    steps=(
+                        WorkflowStep(
+                            step_id="capture_voltage",
+                            title="Capture Voltage",
+                            instruction="Hold a steady DC voltage reading.",
+                            capture=True,
+                            interaction_mode=WorkflowInteractionMode.STABLE_CAPTURE,
+                            advance_on_capture=False,
+                            capture_settings=WorkflowCaptureSettings(
+                                stable_for_s=0.75,
+                                min_samples=5,
+                                relative_tolerance=0.01,
+                            ),
+                            expected_measurement_type=MeasurementType.VOLTAGE_DC,
+                            expected_unit="V",
+                        ),
+                    ),
+                )
+            ]
+        )
+        presenter = AppPresenter(manager, store, workflow_catalog=catalog)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-stable-capture")
+            presenter.select_workflow("stable_capture_only")
+            run_id = presenter.start_workflow()
+
+            for offset_ms, value in zip((0, 200, 400, 800, 1000), (12.0, 12.0, 12.01, 12.0, 12.0), strict=True):
+                presenter.on_reading(_manual_voltage_reading("meter-stable-capture", value, offset_ms))
+
+            workflow_vm = presenter.workflow_view_model()
+            self.assertEqual(workflow_vm.capture_state_text, "Captured")
+            self.assertTrue(workflow_vm.can_continue_capture)
+            self.assertTrue(workflow_vm.can_retake_capture)
+            self.assertIn("Pending capture: 12 V", workflow_vm.latest_capture_text)
+
+            presenter.retake_workflow_capture()
+            workflow_vm = presenter.workflow_view_model()
+            self.assertEqual(workflow_vm.capture_state_text, "Contact detected")
+            self.assertIn("Retake armed", workflow_vm.capture_hint_text)
+
+            for offset_ms, value in zip((1200, 1400, 1600, 2000, 2200), (12.2, 12.2, 12.21, 12.2, 12.2), strict=True):
+                presenter.on_reading(_manual_voltage_reading("meter-stable-capture", value, offset_ms))
+
+            presenter.continue_workflow_capture(note="Captured stable bench voltage.")
+
+            workflow_vm = presenter.workflow_view_model()
+            self.assertFalse(workflow_vm.is_running)
+            self.assertEqual(store.workflow_runs.get(run_id).result.value, "completed")
+            results = store.workflow_step_results.list_for_run(run_id)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].reading.display_text, "12.2 V")
+        finally:
+            store.close()
+
+    async def test_presenter_supports_live_chart_modes_and_session_segment_axis(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-chart-modes.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-chart-modes",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:AC",
+                    rssi=-46,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-chart-modes")
+            session_id = presenter.start_logging(title="Chart Modes Session")
+
+            for offset_s, value in ((0, 10.0), (1, 10.1), (2, 10.2), (38, 10.3), (39, 10.4)):
+                reading = _manual_voltage_reading("meter-chart-modes", value, offset_s * 1000)
+                presenter.on_reading(reading)
+                presenter._recorder.on_reading(reading)
+            presenter.stop_logging()
+
+            live = presenter.live_view_model()
+            self.assertEqual(len(live.chart_points), 2)
+
+            presenter.select_live_chart_mode("since_mode_start")
+            live = presenter.live_view_model()
+            self.assertEqual(live.selected_chart_mode, "since_mode_start")
+            self.assertEqual(len(live.chart_points), 0)
+            self.assertIn("Since mode start", live.chart_notice_text)
+
+            presenter.select_session(session_id)
+            session_vm = presenter.session_view_model()
+            self.assertEqual(session_vm.selected_axis_mode, "elapsed")
+            self.assertEqual(session_vm.chart_x_mode, "elapsed")
+
+            presenter.select_session_axis_mode("utc")
+            session_vm = presenter.session_view_model()
+            self.assertEqual(session_vm.chart_x_mode, "datetime")
+            self.assertEqual(session_vm.chart_x_title, "UTC")
+            self.assertGreater(session_vm.chart_points[0][0], 1_000_000_000_000)
+
+            presenter.select_session_axis_mode("by_segment")
+            session_vm = presenter.session_view_model()
+            self.assertEqual(len(session_vm.available_segments), 2)
+            self.assertEqual(session_vm.selected_segment_id, "segment_1")
+            self.assertEqual(session_vm.chart_x_mode, "elapsed")
+            self.assertEqual(len(session_vm.chart_points), 3)
+
+            presenter.select_session_segment("segment_2")
+            session_vm = presenter.session_view_model()
+            self.assertEqual(session_vm.selected_segment_id, "segment_2")
+            self.assertEqual(len(session_vm.chart_points), 2)
+            self.assertEqual(session_vm.chart_points[0][0], 0.0)
+        finally:
+            store.close()
+
+
+def _manual_voltage_reading(device_id: str, value: float, offset_ms: int) -> Reading:
+    base = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+    return Reading(
+        timestamp_utc=base + timedelta(milliseconds=offset_ms),
+        value=value,
+        unit="V",
+        measurement_type=MeasurementType.VOLTAGE_DC,
+        status=ReadingStatus.OK,
+        display_text=f"{value:g} V",
+        source_device_id=device_id,
+        mode="dc",
+        metadata={"unit_family": "voltage"},
+    )
 
 
 if __name__ == "__main__":

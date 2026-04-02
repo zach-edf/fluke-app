@@ -35,8 +35,8 @@ from apps.desktop._qt import (
     Qt,
 )
 from apps.desktop.widgets import build_reading_chart
-from fluke_core.enums import MeasurementType
-from fluke_core.models.workflow import WorkflowDefinition, WorkflowStep
+from fluke_core.enums import MeasurementType, WorkflowInteractionMode
+from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefinition, WorkflowStep
 
 
 @dataclass(slots=True)
@@ -50,9 +50,15 @@ class _WorkflowStepDraft:
     title: str = ""
     instruction: str = ""
     capture: bool = False
+    interaction_mode: WorkflowInteractionMode = WorkflowInteractionMode.MANUAL_CHECK
+    advance_on_capture: bool = False
     expected_measurement_type: MeasurementType | None = None
     expected_unit: str = ""
     note_prompt: str = ""
+    stable_for_s: float = 0.75
+    min_samples: int = 5
+    relative_tolerance: float = 0.01
+    countdown_s: float = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +181,28 @@ def _measurement_options() -> list[tuple[str, MeasurementType | None]]:
     ]
 
 
+def _interaction_mode_options() -> list[tuple[str, WorkflowInteractionMode]]:
+    return [
+        ("Manual Check", WorkflowInteractionMode.MANUAL_CHECK),
+        ("Stable Capture", WorkflowInteractionMode.STABLE_CAPTURE),
+        ("Countdown Capture", WorkflowInteractionMode.COUNTDOWN_CAPTURE),
+        ("Observe And Confirm", WorkflowInteractionMode.OBSERVE_AND_CONFIRM),
+    ]
+
+
 def _coerce_measurement_type(value: object) -> MeasurementType | None:
     if value in {None, ""}:
         return None
     if isinstance(value, MeasurementType):
         return value
     return MeasurementType(str(value))
+
+
+def _coerce_float(text: str, default: float) -> float:
+    try:
+        return float(text.strip())
+    except ValueError:
+        return default
 
 
 class _WorkflowBuilderDialog(QDialog):
@@ -252,8 +274,9 @@ class _WorkflowBuilderDialog(QDialog):
         self._step_instruction = QTextEdit()
         self._step_instruction.setFixedHeight(120)
         self._step_instruction.setPlaceholderText("Explain exactly what the user should do.")
-        self._step_capture = QCheckBox("This step captures a meter reading")
-        self._step_capture.setToolTip("Check this box to enable measurement type and expected unit for this step.")
+        self._step_mode = QComboBox()
+        for label, value in _interaction_mode_options():
+            self._step_mode.addItem(label, value)
         self._step_measurement = QComboBox()
         for label, value in _measurement_options():
             self._step_measurement.addItem(label, value)
@@ -261,13 +284,27 @@ class _WorkflowBuilderDialog(QDialog):
         self._step_unit = QLineEdit()
         self._step_unit.setPlaceholderText("V")
         self._step_unit.setToolTip("Available when this step is configured to capture a reading.")
+        self._step_advance = QCheckBox("Auto-advance after capture")
+        self._step_stable_for = QLineEdit()
+        self._step_stable_for.setPlaceholderText("0.75")
+        self._step_relative_tolerance = QLineEdit()
+        self._step_relative_tolerance.setPlaceholderText("0.01")
+        self._step_min_samples = QSpinBox()
+        self._step_min_samples.setRange(1, 200)
+        self._step_countdown = QLineEdit()
+        self._step_countdown.setPlaceholderText("3.0")
         self._step_note_prompt = QLineEdit()
         self._step_note_prompt.setPlaceholderText("Optional note prompt shown to the operator")
         editor_form.addRow("Title", self._step_title)
         editor_form.addRow("Instruction", self._step_instruction)
-        editor_form.addRow("", self._step_capture)
+        editor_form.addRow("Interaction Mode", self._step_mode)
         editor_form.addRow("Measurement Type", self._step_measurement)
         editor_form.addRow("Expected Unit", self._step_unit)
+        editor_form.addRow("", self._step_advance)
+        editor_form.addRow("Stable For (s)", self._step_stable_for)
+        editor_form.addRow("Min Samples", self._step_min_samples)
+        editor_form.addRow("Rel Tolerance", self._step_relative_tolerance)
+        editor_form.addRow("Countdown (s)", self._step_countdown)
         editor_form.addRow("Note Prompt", self._step_note_prompt)
         editor_column.addLayout(editor_form)
         editor_column.addStretch()
@@ -291,12 +328,17 @@ class _WorkflowBuilderDialog(QDialog):
         self._title.textChanged.connect(self._sync_workflow_id_from_title)
         self._workflow_id.textEdited.connect(self._mark_workflow_id_dirty)
         self._step_list.currentRowChanged.connect(self._load_current_step)
-        self._step_capture.toggled.connect(self._update_capture_fields)
         self._step_title.textChanged.connect(self._sync_current_step_fields)
         self._step_instruction.textChanged.connect(self._sync_current_step_fields)
-        self._step_capture.toggled.connect(self._sync_current_step_fields)
+        self._step_mode.currentIndexChanged.connect(self._update_capture_fields)
+        self._step_mode.currentIndexChanged.connect(self._sync_current_step_fields)
         self._step_measurement.currentIndexChanged.connect(self._sync_current_step_fields)
         self._step_unit.textChanged.connect(self._sync_current_step_fields)
+        self._step_advance.toggled.connect(self._sync_current_step_fields)
+        self._step_stable_for.textChanged.connect(self._sync_current_step_fields)
+        self._step_relative_tolerance.textChanged.connect(self._sync_current_step_fields)
+        self._step_min_samples.valueChanged.connect(self._sync_current_step_fields)
+        self._step_countdown.textChanged.connect(self._sync_current_step_fields)
         self._step_note_prompt.textChanged.connect(self._sync_current_step_fields)
         self._add_step_button.clicked.connect(self._add_step)
         self._remove_step_button.clicked.connect(self._remove_current_step)
@@ -357,9 +399,30 @@ class _WorkflowBuilderDialog(QDialog):
                     step_id=step_id,
                     title=step_title,
                     instruction=instruction,
-                    capture=draft.capture,
-                    expected_measurement_type=draft.expected_measurement_type if draft.capture else None,
-                    expected_unit=_text_or_none(draft.expected_unit) if draft.capture else None,
+                    capture=draft.interaction_mode in {
+                        WorkflowInteractionMode.STABLE_CAPTURE,
+                        WorkflowInteractionMode.COUNTDOWN_CAPTURE,
+                    },
+                    interaction_mode=draft.interaction_mode,
+                    advance_on_capture=draft.advance_on_capture,
+                    capture_settings=WorkflowCaptureSettings(
+                        stable_for_s=draft.stable_for_s,
+                        min_samples=draft.min_samples,
+                        relative_tolerance=draft.relative_tolerance,
+                        countdown_s=draft.countdown_s,
+                    ),
+                    expected_measurement_type=(
+                        draft.expected_measurement_type
+                        if draft.interaction_mode in {
+                            WorkflowInteractionMode.STABLE_CAPTURE,
+                            WorkflowInteractionMode.COUNTDOWN_CAPTURE,
+                        }
+                        else None
+                    ),
+                    expected_unit=_text_or_none(draft.expected_unit) if draft.interaction_mode in {
+                        WorkflowInteractionMode.STABLE_CAPTURE,
+                        WorkflowInteractionMode.COUNTDOWN_CAPTURE,
+                    } else None,
                     note_prompt=_text_or_none(draft.note_prompt),
                 )
             )
@@ -396,10 +459,19 @@ class _WorkflowBuilderDialog(QDialog):
         self._step_drafts[index] = _WorkflowStepDraft(
             title=self._step_title.text().strip(),
             instruction=self._step_instruction.toPlainText().strip(),
-            capture=self._step_capture.isChecked(),
+            capture=self._step_mode.currentData() in {
+                WorkflowInteractionMode.STABLE_CAPTURE,
+                WorkflowInteractionMode.COUNTDOWN_CAPTURE,
+            },
+            interaction_mode=self._step_mode.currentData(),
+            advance_on_capture=self._step_advance.isChecked(),
             expected_measurement_type=_coerce_measurement_type(self._step_measurement.currentData()),
             expected_unit=self._step_unit.text().strip(),
             note_prompt=self._step_note_prompt.text().strip(),
+            stable_for_s=_coerce_float(self._step_stable_for.text(), 0.75),
+            min_samples=self._step_min_samples.value(),
+            relative_tolerance=_coerce_float(self._step_relative_tolerance.text(), 0.01),
+            countdown_s=_coerce_float(self._step_countdown.text(), 3.0),
         )
         self._refresh_step_list_labels()
 
@@ -411,10 +483,16 @@ class _WorkflowBuilderDialog(QDialog):
         self._set_step_editor_enabled(True)
         self._step_title.setText(draft.title)
         self._step_instruction.setPlainText(draft.instruction)
-        self._step_capture.setChecked(draft.capture)
+        mode_index = self._step_mode.findData(draft.interaction_mode)
+        self._step_mode.setCurrentIndex(0 if mode_index < 0 else mode_index)
         measurement_index = self._step_measurement.findData(draft.expected_measurement_type)
         self._step_measurement.setCurrentIndex(0 if measurement_index < 0 else measurement_index)
         self._step_unit.setText(draft.expected_unit)
+        self._step_advance.setChecked(draft.advance_on_capture)
+        self._step_stable_for.setText(str(draft.stable_for_s))
+        self._step_relative_tolerance.setText(str(draft.relative_tolerance))
+        self._step_min_samples.setValue(draft.min_samples)
+        self._step_countdown.setText(str(draft.countdown_s))
         self._step_note_prompt.setText(draft.note_prompt)
         self._update_capture_fields()
         self._refresh_step_action_state()
@@ -423,9 +501,14 @@ class _WorkflowBuilderDialog(QDialog):
         for widget in (
             self._step_title,
             self._step_instruction,
-            self._step_capture,
+            self._step_mode,
             self._step_measurement,
             self._step_unit,
+            self._step_advance,
+            self._step_stable_for,
+            self._step_relative_tolerance,
+            self._step_min_samples,
+            self._step_countdown,
             self._step_note_prompt,
         ):
             widget.setEnabled(enabled)
@@ -445,8 +528,7 @@ class _WorkflowBuilderDialog(QDialog):
             self._step_list.clear()
             for index, draft in enumerate(self._step_drafts, start=1):
                 label = draft.title or f"Step {index}"
-                if draft.capture:
-                    label = f"{label} [capture]"
+                label = f"{label} [{draft.interaction_mode.value.replace('_', ' ')}]"
                 self._step_list.addItem(label)
             if self._step_drafts:
                 next_row = min(max(current_row, 0), len(self._step_drafts) - 1)
@@ -492,9 +574,17 @@ class _WorkflowBuilderDialog(QDialog):
         self._step_list.setCurrentRow(index + 1)
 
     def _update_capture_fields(self) -> None:
-        enabled = self._step_capture.isChecked()
-        self._step_measurement.setEnabled(enabled)
-        self._step_unit.setEnabled(enabled)
+        mode = self._step_mode.currentData()
+        capture_enabled = mode in {WorkflowInteractionMode.STABLE_CAPTURE, WorkflowInteractionMode.COUNTDOWN_CAPTURE}
+        stable_enabled = mode == WorkflowInteractionMode.STABLE_CAPTURE
+        countdown_enabled = mode == WorkflowInteractionMode.COUNTDOWN_CAPTURE
+        self._step_measurement.setEnabled(capture_enabled)
+        self._step_unit.setEnabled(capture_enabled)
+        self._step_advance.setEnabled(capture_enabled)
+        self._step_stable_for.setEnabled(stable_enabled)
+        self._step_relative_tolerance.setEnabled(stable_enabled)
+        self._step_min_samples.setEnabled(stable_enabled)
+        self._step_countdown.setEnabled(countdown_enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +666,21 @@ def create_main_window(runtime) -> QWidget:
                     ),
                     "CSV",
                 )
+            )
+            QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(
+                lambda: _workflow_primary_shortcut(self, runtime)
+            )
+            QShortcut(QKeySequence(Qt.Key.Key_Return), self).activated.connect(
+                lambda: _workflow_continue_shortcut(self, runtime)
+            )
+            QShortcut(QKeySequence(Qt.Key.Key_Enter), self).activated.connect(
+                lambda: _workflow_continue_shortcut(self, runtime)
+            )
+            QShortcut(QKeySequence(Qt.Key.Key_R), self).activated.connect(
+                lambda: _workflow_retake_shortcut(self, runtime)
+            )
+            QShortcut(QKeySequence(Qt.Key.Key_Escape), self).activated.connect(
+                lambda: _workflow_cancel_shortcut(self, runtime)
             )
 
             self._refresh_timer = QTimer(self)
@@ -733,6 +838,12 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     chart_notice.setObjectName("notice_banner")
     chart_notice.setWordWrap(True)
     chart_notice.hide()
+    chart_mode = QComboBox()
+    chart_mode.addItem("Rolling 30s", "rolling_30s")
+    chart_mode.addItem("Rolling 60s", "rolling_60s")
+    chart_mode.addItem("Rolling 5m", "rolling_5m")
+    chart_mode.addItem("Since Mode Start", "since_mode_start")
+    chart_mode.addItem("Since Session Start", "since_session_start")
     last_updated = QLabel()
     session = QLabel()
     summary = QLabel()
@@ -801,6 +912,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     form = QFormLayout()
     form.addRow("Session Title", title_input)
     form.addRow("Session Notes", notes_input)
+    form.addRow("Chart Mode", chart_mode)
 
     start_button.clicked.connect(
         lambda: _safe_call(
@@ -820,6 +932,9 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     )
     disconnect_button.clicked.connect(
         lambda: _confirm_and_disconnect(window, runtime)
+    )
+    chart_mode.currentIndexChanged.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.select_live_chart_mode(chart_mode.currentData()))
     )
 
     action_row = QHBoxLayout()
@@ -871,6 +986,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             "export_chart_button": export_chart_button,
             "disconnect_button": disconnect_button,
             "chart": chart,
+            "chart_mode": chart_mode,
             "last_alert_event_id": 0,
         },
     )
@@ -890,6 +1006,13 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     export_status.setWordWrap(True)
     context_filter = QComboBox()
     context_filter.setToolTip("Filter replay chart and summary by measurement context")
+    axis_filter = QComboBox()
+    axis_filter.addItem("Elapsed Time", "elapsed")
+    axis_filter.addItem("UTC Timestamp", "utc")
+    axis_filter.addItem("By Segment", "by_segment")
+    axis_filter.setToolTip("Change the replay x-axis interpretation")
+    segment_filter = QComboBox()
+    segment_filter.setToolTip("Select a derived segment when using segment view")
     compare_filter = QComboBox()
     compare_filter.setToolTip("Overlay another session using the current measurement view")
 
@@ -904,10 +1027,14 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
         title="Session Replay",
         empty_text="Select a recorded session to inspect its replay chart and markers.",
     )
-    export_csv = QPushButton("Export Session CSV")
-    export_csv.setToolTip("Export the selected session as CSV (Ctrl+E)")
-    export_json = QPushButton("Export Session JSON")
-    export_json.setToolTip("Export the selected session as JSON")
+    export_csv = QPushButton("Export Raw CSV")
+    export_csv.setToolTip("Export the selected session as raw CSV (Ctrl+E)")
+    export_json = QPushButton("Export Raw JSON")
+    export_json.setToolTip("Export the selected session as raw JSON")
+    export_analysis = QPushButton("Export Analysis CSV")
+    export_analysis.setToolTip("Export the selected session as a wide analysis table")
+    export_segments = QPushButton("Export Segment Summary JSON")
+    export_segments.setToolTip("Export the selected session's derived mode segments and marker summary")
     export_chart = QPushButton("Export Session Chart")
     export_chart.setToolTip("Save the session chart as a PNG image")
 
@@ -922,6 +1049,12 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
 
     def on_compare_changed() -> None:
         _safe_call(runtime, lambda: runtime.presenter.select_compare_session(compare_filter.currentData()))
+
+    def on_axis_changed() -> None:
+        _safe_call(runtime, lambda: runtime.presenter.select_session_axis_mode(axis_filter.currentData()))
+
+    def on_segment_changed() -> None:
+        _safe_call(runtime, lambda: runtime.presenter.select_session_segment(segment_filter.currentData()))
 
     export_csv.clicked.connect(
         lambda: _export_and_notify(
@@ -946,8 +1079,32 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     export_chart.clicked.connect(
         lambda: _export_chart_with_dialog(window, runtime, chart, _session_chart_export_path(runtime))
     )
+    export_analysis.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_analysis_csv(
+                _session_export_path(runtime, "analysis.csv"),
+                session_id=_selected_session_id(runtime),
+            ),
+            "Analysis CSV",
+        )
+    )
+    export_segments.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_segment_summary_json(
+                _session_export_path(runtime, "segments.json"),
+                session_id=_selected_session_id(runtime),
+            ),
+            "Segment Summary JSON",
+        )
+    )
     recent.itemSelectionChanged.connect(on_selection_changed)
     context_filter.currentIndexChanged.connect(on_context_changed)
+    axis_filter.currentIndexChanged.connect(on_axis_changed)
+    segment_filter.currentIndexChanged.connect(on_segment_changed)
     compare_filter.currentIndexChanged.connect(on_compare_changed)
 
     session_list_column = QVBoxLayout()
@@ -965,6 +1122,18 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     context_row.addWidget(context_label)
     context_row.addWidget(context_filter, 1)
     detail_column.addLayout(context_row)
+    axis_row = QHBoxLayout()
+    axis_label = QLabel("Axis Mode")
+    axis_label.setObjectName("section_header")
+    axis_row.addWidget(axis_label)
+    axis_row.addWidget(axis_filter, 1)
+    detail_column.addLayout(axis_row)
+    segment_row = QHBoxLayout()
+    segment_label = QLabel("Segment")
+    segment_label.setObjectName("section_header")
+    segment_row.addWidget(segment_label)
+    segment_row.addWidget(segment_filter, 1)
+    detail_column.addLayout(segment_row)
     compare_row = QHBoxLayout()
     compare_label = QLabel("Compare Against")
     compare_label.setObjectName("section_header")
@@ -989,6 +1158,8 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     actions = QHBoxLayout()
     actions.addWidget(export_csv)
     actions.addWidget(export_json)
+    actions.addWidget(export_analysis)
+    actions.addWidget(export_segments)
     actions.addWidget(export_chart)
     layout.addLayout(actions)
 
@@ -1000,8 +1171,11 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
             "context_filter": context_filter, "context_label": context_label,
+            "axis_filter": axis_filter, "axis_label": axis_label,
+            "segment_filter": segment_filter, "segment_label": segment_label,
             "compare_filter": compare_filter, "compare_label": compare_label,
             "export_csv": export_csv, "export_json": export_json,
+            "export_analysis": export_analysis, "export_segments": export_segments,
             "export_chart": export_chart, "chart": chart,
         },
     )
@@ -1087,6 +1261,10 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     instruction = QLabel()
     instruction.setWordWrap(True)
     requirement = QLabel()
+    interaction_mode = QLabel()
+    capture_state = QLabel()
+    capture_hint = QLabel()
+    capture_hint.setWordWrap(True)
     active_session = QLabel()
     latest_capture = QLabel()
     run_result = QLabel()
@@ -1109,6 +1287,10 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     new_workflow_button.setToolTip("Create a new workflow definition from the desktop app")
     complete_button = QPushButton("Complete Step")
     complete_button.setToolTip("Complete the current workflow step and capture reading")
+    continue_button = QPushButton("Continue")
+    continue_button.setToolTip("Continue after accepting a captured reading")
+    retake_button = QPushButton("Retake")
+    retake_button.setToolTip("Discard the staged reading and capture the current step again")
     skip_button = QPushButton("Skip Step")
     skip_button.setToolTip("Skip the current workflow step")
     cancel_button = QPushButton("Cancel Workflow")
@@ -1131,6 +1313,10 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     complete_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: _complete_workflow_step(runtime, note_input))
     )
+    continue_button.clicked.connect(
+        lambda: _safe_call(runtime, lambda: _continue_workflow_capture(runtime, note_input))
+    )
+    retake_button.clicked.connect(lambda: _safe_call(runtime, runtime.presenter.retake_workflow_capture))
     skip_button.clicked.connect(lambda: _safe_call(runtime, lambda: _skip_workflow_step(runtime, note_input)))
     cancel_button.clicked.connect(
         lambda: _confirm_and_cancel_workflow(window, runtime)
@@ -1157,13 +1343,16 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
 
     actions = QHBoxLayout()
     actions.addWidget(complete_button)
+    actions.addWidget(continue_button)
+    actions.addWidget(retake_button)
     actions.addWidget(skip_button)
     actions.addWidget(cancel_button)
 
     right = QVBoxLayout()
     for widget in (
         status, title, description, progress, current_step,
-        instruction, requirement, active_session, latest_capture, run_result, selected_run, note_input,
+        instruction, requirement, interaction_mode, capture_state, capture_hint,
+        active_session, latest_capture, run_result, selected_run, note_input,
     ):
         right.addWidget(widget)
     steps_header = QLabel("Completed Steps")
@@ -1199,9 +1388,14 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
             "recent_runs": recent_runs,
             "start_button": start_button, "new_workflow_button": new_workflow_button,
             "complete_button": complete_button,
+            "continue_button": continue_button,
+            "retake_button": retake_button,
             "skip_button": skip_button, "cancel_button": cancel_button,
             "export_report_button": export_report_button,
             "list_item_cls": QListWidgetItem,
+            "interaction_mode": interaction_mode,
+            "capture_state": capture_state,
+            "capture_hint": capture_hint,
         },
     )
 
@@ -1290,6 +1484,14 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["summary"].setText(live.summary_text)
     panel.refs["marker_count"].setText(live.marker_count_text)
     panel.refs["alert_status"].setText(live.alert_status_text)
+    chart_mode = panel.refs["chart_mode"]
+    current_chart_index = chart_mode.findData(live.selected_chart_mode)
+    if current_chart_index >= 0 and chart_mode.currentIndex() != current_chart_index:
+        chart_mode.blockSignals(True)
+        try:
+            chart_mode.setCurrentIndex(current_chart_index)
+        finally:
+            chart_mode.blockSignals(False)
     panel.refs["start_button"].setEnabled(live.is_connected and not live.is_logging)
     panel.refs["stop_button"].setEnabled(live.is_logging)
     panel.refs["add_marker_button"].setEnabled(live.is_logging)
@@ -1305,7 +1507,10 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["last_alert_event_id"] = live.alert_event_id
     panel.refs["chart"].set_data(
         live.chart_points, live.marker_points,
-        unit_text=live.unit_text, measurement_label=live.measurement_label,
+        unit_text=live.unit_text,
+        measurement_label=live.measurement_label,
+        x_axis_mode=live.chart_x_mode,
+        x_axis_title=live.chart_x_title,
     )
     title_input = panel.refs["title_input"]
     if live.session_title and not title_input.text():
@@ -1358,24 +1563,43 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         session.selected_context_id,
     )
     _sync_combo_rows(
+        panel.refs["axis_filter"],
+        [("elapsed", "Elapsed Time"), ("utc", "UTC Timestamp"), ("by_segment", "By Segment")],
+        session.selected_axis_mode,
+    )
+    _sync_combo_rows(
+        panel.refs["segment_filter"],
+        [(None, "All Segments")] + [(segment.segment_id, segment.display_text) for segment in session.available_segments],
+        session.selected_segment_id,
+    )
+    _sync_combo_rows(
         panel.refs["compare_filter"],
         [(None, "No Comparison")] + [(item.session_id, item.display_text) for item in session.available_compare_sessions],
         session.compare_session_id,
     )
     show_context_filter = bool(session.available_contexts)
+    show_segment_filter = session.selected_axis_mode == "by_segment" and bool(session.available_segments)
     show_compare_filter = bool(session.available_compare_sessions)
     panel.refs["context_filter"].setVisible(show_context_filter)
     panel.refs["context_label"].setVisible(show_context_filter)
+    panel.refs["axis_filter"].setVisible(True)
+    panel.refs["axis_label"].setVisible(True)
+    panel.refs["segment_filter"].setVisible(show_segment_filter)
+    panel.refs["segment_label"].setVisible(show_segment_filter)
     panel.refs["compare_filter"].setVisible(show_compare_filter)
     panel.refs["compare_label"].setVisible(show_compare_filter)
 
     panel.refs["export_csv"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_json"].setEnabled(session.selected_session_id is not None)
+    panel.refs["export_analysis"].setEnabled(session.selected_session_id is not None)
+    panel.refs["export_segments"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_chart"].setEnabled(bool(session.chart_points))
     panel.refs["chart"].set_data(
         session.chart_points, session.marker_points,
         unit_text=session.selected_unit_text,
         measurement_label=session.selected_context_label or "Session Replay",
+        x_axis_mode=session.chart_x_mode,
+        x_axis_title=session.chart_x_title,
         comparison_points=session.compare_chart_points,
         comparison_label=session.compare_session_label or "Comparison",
     )
@@ -1399,6 +1623,13 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
     panel.refs["current_step"].setText(f"Current Step: {workflow.current_step_title}")
     panel.refs["instruction"].setText(workflow.current_instruction_text)
     panel.refs["requirement"].setText(workflow.current_requirement_text)
+    panel.refs["interaction_mode"].setText(
+        f"Step Mode: {workflow.current_interaction_mode_text}" if workflow.current_interaction_mode_text else ""
+    )
+    panel.refs["capture_state"].setText(
+        f"Capture State: {workflow.capture_state_text}" if workflow.capture_state_text else ""
+    )
+    panel.refs["capture_hint"].setText(workflow.capture_hint_text)
     panel.refs["active_session"].setText(f"Session: {workflow.active_session_text}")
     panel.refs["latest_capture"].setText(workflow.latest_capture_text)
     panel.refs["run_result"].setText(f"Run Result: {workflow.run_result_text}")
@@ -1444,7 +1675,10 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
         report_view.setPlainText(workflow.report_text)
 
     panel.refs["start_button"].setEnabled(workflow.selected_workflow_id is not None and not workflow.is_running)
+    panel.refs["complete_button"].setText(workflow.primary_action_text)
     panel.refs["complete_button"].setEnabled(workflow.is_running)
+    panel.refs["continue_button"].setEnabled(workflow.can_continue_capture)
+    panel.refs["retake_button"].setEnabled(workflow.can_retake_capture)
     panel.refs["skip_button"].setEnabled(workflow.is_running)
     panel.refs["cancel_button"].setEnabled(workflow.is_running)
     panel.refs["note_input"].setEnabled(workflow.is_running)
@@ -1552,7 +1786,13 @@ def _export_directory(runtime) -> Path:
 
 def _session_export_path(runtime, extension: str) -> Path:
     session_id = _selected_session_id(runtime) or "desktop-session"
-    return _export_directory(runtime) / f"session-{session_id}.{extension}"
+    if extension.startswith("."):
+        suffix = extension
+    elif "." in extension:
+        suffix = f"-{extension}"
+    else:
+        suffix = f".{extension}"
+    return _export_directory(runtime) / f"session-{session_id}{suffix}"
 
 
 def _session_chart_export_path(runtime) -> Path:
@@ -1575,7 +1815,51 @@ def _complete_workflow_step(runtime, note_input) -> None:
     note_input.clear()
 
 
+def _continue_workflow_capture(runtime, note_input) -> None:
+    note = _text_or_none(note_input.text())
+    runtime.presenter.continue_workflow_capture(note=note)
+    note_input.clear()
+
+
 def _skip_workflow_step(runtime, note_input) -> None:
     note = _text_or_none(note_input.text())
     runtime.presenter.skip_workflow_step(note=note)
     note_input.clear()
+
+
+def _workflow_primary_shortcut(window: QWidget, runtime) -> None:
+    if not _workflow_shortcut_allowed(window):
+        return
+    _safe_call(runtime, lambda: _complete_workflow_step(runtime, window._workflow.refs["note_input"]))  # type: ignore[attr-defined]
+
+
+def _workflow_continue_shortcut(window: QWidget, runtime) -> None:
+    if not _workflow_shortcut_allowed(window):
+        return
+    workflow = runtime.presenter.workflow_view_model()
+    if workflow.can_continue_capture:
+        _safe_call(runtime, lambda: _continue_workflow_capture(runtime, window._workflow.refs["note_input"]))  # type: ignore[attr-defined]
+
+
+def _workflow_retake_shortcut(window: QWidget, runtime) -> None:
+    if not _workflow_shortcut_allowed(window):
+        return
+    workflow = runtime.presenter.workflow_view_model()
+    if workflow.can_retake_capture:
+        _safe_call(runtime, runtime.presenter.retake_workflow_capture)
+
+
+def _workflow_cancel_shortcut(window: QWidget, runtime) -> None:
+    if not _workflow_shortcut_allowed(window):
+        return
+    workflow = runtime.presenter.workflow_view_model()
+    if workflow.is_running:
+        _safe_call(runtime, runtime.presenter.cancel_workflow)
+
+
+def _workflow_shortcut_allowed(window: QWidget) -> bool:
+    tabs = getattr(window, "_tabs", None)
+    if tabs is None or tabs.currentIndex() != 4:  # type: ignore[attr-defined]
+        return False
+    focused = QApplication.focusWidget()
+    return not isinstance(focused, (QLineEdit, QTextEdit))

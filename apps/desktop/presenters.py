@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from statistics import median
@@ -18,6 +18,7 @@ from apps.desktop.viewmodels import (
     SessionCompareViewModel,
     SessionMarkerViewModel,
     SessionContextViewModel,
+    SessionSegmentViewModel,
     SettingsViewModel,
     SessionSummaryViewModel,
     SessionViewModel,
@@ -35,12 +36,25 @@ from fluke_app import (
     new_session,
 )
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
-from fluke_core.enums import MeasurementType, WorkflowRunResult, WorkflowStepResultStatus
+from fluke_core.enums import (
+    MeasurementType,
+    ReadingStatus,
+    WorkflowInteractionMode,
+    WorkflowRunResult,
+    WorkflowStepResultStatus,
+)
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
-from fluke_core.models.workflow import WorkflowDefinition, WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
+from fluke_core.models.workflow import (
+    WorkflowCaptureSettings,
+    WorkflowDefinition,
+    WorkflowRun,
+    WorkflowRunState,
+    WorkflowStep,
+    WorkflowStepResult,
+)
 from fluke_core.services.statistics import summarize_readings
 
 _UNCHANGED = object()
@@ -72,6 +86,35 @@ class _ReplayGroup:
     display_unit: str
     total_count: int
     numeric_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _DerivedSegment:
+    segment_id: str
+    segment_index: int
+    context_id: str
+    label: str
+    normalization_key: str | None
+    measurement_type: str
+    unit: str
+    mode: str
+    start_utc: datetime
+    end_utc: datetime
+    readings: tuple[Reading, ...]
+
+
+@dataclass(slots=True)
+class _WorkflowCaptureRuntime:
+    step_id: str | None = None
+    state: str = "idle"
+    hint_text: str = ""
+    pending_reading: Reading | None = None
+    samples: deque[Reading] | None = None
+    countdown_deadline: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.samples is None:
+            self.samples = deque(maxlen=64)
 
 
 class AppPresenter:
@@ -124,13 +167,14 @@ class AppPresenter:
         self._workflow = WorkflowViewModel()
         self._workflow_status_message = "Select a workflow to review the steps."
         self._workflow_owned_session_id: str | None = None
+        self._workflow_capture = _WorkflowCaptureRuntime()
         self._current_device: DeviceInfo | None = None
         self._last_completed_session_id: str | None = None
-        self._live_points: deque[tuple[float, float]] = deque(maxlen=300)
-        self._live_marker_points: deque[tuple[float, float]] = deque(maxlen=100)
-        self._live_readings: list[Reading] = []
+        self._live_readings: deque[Reading] = deque(maxlen=5000)
+        self._live_markers: list[SessionMarker] = []
         self._live_context_key: tuple[str, str, str] | None = None
-        self._chart_t0: datetime | None = None
+        self._live_chart_mode = "rolling_30s"
+        self._live_segment_started_at: datetime | None = None
         self._last_reading_time: datetime | None = None
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._auto_reconnect_attempts = max(0, int(auto_reconnect_attempts))
@@ -335,6 +379,7 @@ class AppPresenter:
         )
         with self._lock:
             session_label = session.title or session.session_id
+            self._live_markers = []
             self._home = replace(self._home, active_session_text=session_label)
             self._live = replace(
                 self._live,
@@ -379,13 +424,10 @@ class AppPresenter:
     def add_marker(self, note: str, label: str = "note") -> SessionMarker:
         marker = self._recorder.add_marker(note, label=label)
         with self._lock:
-            if self._chart_t0 is not None:
-                x_value = max((marker.timestamp_utc - self._chart_t0).total_seconds(), 0.0)
-                y_value = self._live_points[-1][1] if self._live_points else 0.0
-                self._live_marker_points.append((x_value, y_value))
+            self._live_markers.append(marker)
+            self._refresh_live_chart_locked()
             self._live = replace(
                 self._live,
-                marker_points=tuple(self._live_marker_points),
                 marker_count_text=f"{self._recorder.marker_count()} markers",
             )
         if self.session_view_model().selected_session_id == marker.session_id:
@@ -397,7 +439,7 @@ class AppPresenter:
         export_path = self._resolve_export_path(path, "desktop_session.csv")
         exported = self._export_service.export_csv(target, export_path)
         with self._lock:
-            self._session = replace(self._session, export_status_text=f"CSV exported to {exported}")
+            self._session = replace(self._session, export_status_text=f"Raw CSV exported to {exported}")
         return exported
 
     def export_session_json(self, path: str | Path, session_id: str | None = None) -> str:
@@ -405,7 +447,23 @@ class AppPresenter:
         export_path = self._resolve_export_path(path, "desktop_session.json")
         exported = self._export_service.export_json(target, export_path)
         with self._lock:
-            self._session = replace(self._session, export_status_text=f"JSON exported to {exported}")
+            self._session = replace(self._session, export_status_text=f"Raw JSON exported to {exported}")
+        return exported
+
+    def export_analysis_csv(self, path: str | Path, session_id: str | None = None) -> str:
+        target = self._resolve_export_session_id(session_id)
+        export_path = self._resolve_export_path(path, "desktop_analysis.csv")
+        exported = self._export_service.export_analysis_csv(target, export_path)
+        with self._lock:
+            self._session = replace(self._session, export_status_text=f"Analysis CSV exported to {exported}")
+        return exported
+
+    def export_segment_summary_json(self, path: str | Path, session_id: str | None = None) -> str:
+        target = self._resolve_export_session_id(session_id)
+        export_path = self._resolve_export_path(path, "desktop_segments.json")
+        exported = self._export_service.export_segment_summary_json(target, export_path)
+        with self._lock:
+            self._session = replace(self._session, export_status_text=f"Segment summary JSON exported to {exported}")
         return exported
 
     def export_workflow_report(self, path: str | Path, run_id: str | None = None) -> str:
@@ -522,6 +580,9 @@ class AppPresenter:
         current_step_title = "No active step"
         current_instruction = ""
         current_requirement = ""
+        current_interaction_mode = ""
+        capture_state_text = ""
+        capture_hint_text = ""
         active_session_text = "No workflow session"
         latest_capture_text = "No captured step yet"
         run_result_text = ""
@@ -529,6 +590,9 @@ class AppPresenter:
         report_text = ""
         completed_steps: tuple[WorkflowStepViewModel, ...] = ()
         is_running = active_state is not None and active_state.run.result == WorkflowRunResult.IN_PROGRESS
+        primary_action_text = "Complete Step"
+        can_continue_capture = False
+        can_retake_capture = False
 
         if selected_definition is not None:
             current_title = selected_definition.title
@@ -544,10 +608,24 @@ class AppPresenter:
             current_step_title = "Workflow complete" if current_step is None else current_step.title
             current_instruction = "" if current_step is None else current_step.instruction
             current_requirement = "" if current_step is None else _workflow_requirement_text(current_step)
+            current_interaction_mode = "" if current_step is None else _workflow_interaction_mode_text(current_step)
             active_session_text = active_state.run.session_id
             latest_capture_text = _latest_capture_text(active_state.completed_steps)
             run_result_text = active_state.run.result.value.replace("_", " ").title()
             completed_steps = tuple(_workflow_step_vm(result, selected_definition) for result in active_state.completed_steps)
+            if current_step is not None:
+                if current_step.interaction_mode == WorkflowInteractionMode.COUNTDOWN_CAPTURE:
+                    primary_action_text = "Start Countdown"
+                elif current_step.requires_reading:
+                    primary_action_text = "Capture Now"
+                elif current_step.interaction_mode == WorkflowInteractionMode.OBSERVE_AND_CONFIRM:
+                    primary_action_text = "Confirm Step"
+                capture_state_text = _capture_state_text(self._workflow_capture.state)
+                capture_hint_text = self._workflow_capture.hint_text
+                can_continue_capture = self._workflow_capture.pending_reading is not None and current_step.requires_reading
+                can_retake_capture = can_continue_capture
+                if self._workflow_capture.pending_reading is not None:
+                    latest_capture_text = f"Pending capture: {self._workflow_capture.pending_reading.display_text}"
             session = self._store.sessions.get(active_state.run.session_id)
             selected_run_summary_text = _workflow_run_summary_text(
                 active_state.run,
@@ -598,12 +676,18 @@ class AppPresenter:
                 current_step_title=current_step_title,
                 current_instruction_text=current_instruction,
                 current_requirement_text=current_requirement,
+                current_interaction_mode_text=current_interaction_mode,
+                capture_state_text=capture_state_text,
+                capture_hint_text=capture_hint_text,
                 active_session_text=active_session_text,
                 latest_capture_text=latest_capture_text,
                 run_result_text=run_result_text,
                 selected_run_summary_text=selected_run_summary_text,
                 report_text=report_text,
                 is_running=is_running,
+                primary_action_text=primary_action_text,
+                can_continue_capture=can_continue_capture,
+                can_retake_capture=can_retake_capture,
                 completed_steps=completed_steps,
                 recent_runs=recent_runs,
             )
@@ -671,6 +755,7 @@ class AppPresenter:
         if session is None:
             raise RuntimeError("Workflow could not create or resolve a session.")
         state = self._workflow_runner.start(definition.workflow_id, session.session_id)
+        self._reset_workflow_capture_runtime()
         self._workflow_owned_session_id = session.session_id if owns_session else None
         self._workflow_status_message = f"Started {definition.title}."
         self.add_marker(f"Started workflow: {definition.title}", label="workflow")
@@ -727,16 +812,45 @@ class AppPresenter:
         if current is None or current.current_step is None:
             raise RuntimeError("Start a workflow before completing steps.")
         step = current.current_step
-        latest = self._device_manager.latest_reading()
+        if step.interaction_mode == WorkflowInteractionMode.COUNTDOWN_CAPTURE and self._workflow_capture.pending_reading is None:
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=step.capture_settings.countdown_s)
+            self._workflow_capture.step_id = step.step_id
+            self._workflow_capture.state = "settling"
+            self._workflow_capture.hint_text = f"Countdown running for {step.capture_settings.countdown_s:.1f}s."
+            self._workflow_capture.countdown_deadline = deadline
+            self.refresh_workflows()
+            return current.run.run_id
+
+        latest = self._workflow_capture.pending_reading or self._device_manager.latest_reading()
+        if step.requires_reading:
+            latest = self._workflow_runner.validate_reading_for_step(step, latest)
         state = self._workflow_runner.complete_current_step(latest_reading=latest, note=note)
         detail = f"{current.definition.title}: {step.title}"
-        if step.capture and latest is not None:
+        if step.requires_reading and latest is not None:
             detail = f"{detail} ({latest.display_text})"
         self.add_marker(detail, label="workflow")
         self._workflow_status_message = f"Completed step {step.title}."
+        self._reset_workflow_capture_runtime()
         self._finish_workflow_if_complete(state)
         self.refresh_workflows()
         return state.run.run_id
+
+    def continue_workflow_capture(self, note: str | None = None) -> str:
+        if self._workflow_capture.pending_reading is None:
+            raise RuntimeError("No captured reading is waiting for confirmation.")
+        return self.complete_workflow_step(note=note)
+
+    def retake_workflow_capture(self) -> None:
+        current = self._workflow_runner.active_state()
+        if current is None or current.current_step is None or not current.current_step.requires_reading:
+            raise RuntimeError("No capture step is active.")
+        self._workflow_capture.pending_reading = None
+        self._workflow_capture.samples.clear()
+        self._workflow_capture.countdown_deadline = None
+        self._workflow_capture.state = "contact_detected"
+        self._workflow_capture.hint_text = "Retake armed. Reacquire a stable reading."
+        self._workflow_status_message = f"Retake {current.current_step.title}."
+        self.refresh_workflows()
 
     def skip_workflow_step(self, note: str | None = None) -> str:
         current = self._workflow_runner.active_state()
@@ -746,6 +860,7 @@ class AppPresenter:
         state = self._workflow_runner.skip_current_step(note=note)
         self.add_marker(f"Skipped workflow step: {step.title}", label="workflow")
         self._workflow_status_message = f"Skipped step {step.title}."
+        self._reset_workflow_capture_runtime()
         self._finish_workflow_if_complete(state)
         self.refresh_workflows()
         return state.run.run_id
@@ -760,6 +875,7 @@ class AppPresenter:
         if self._workflow_owned_session_id == run.session_id:
             self.stop_logging()
         self._workflow_owned_session_id = None
+        self._reset_workflow_capture_runtime()
         self.refresh_workflows()
         return run.run_id
 
@@ -771,6 +887,7 @@ class AppPresenter:
         markers = self._store.markers.list_for_session(session_id)
         current_session = self.session_view_model()
         replay_groups = _build_session_replay_groups(readings)
+        derived_segments = _derive_mode_segments(readings)
         compare_options = tuple(
             _session_compare_vm(item)
             for item in self._store.sessions.list_recent(limit=25)
@@ -778,7 +895,11 @@ class AppPresenter:
         )
         same_session = current_session.selected_session_id == session_id
         selected_context_id = current_session.selected_context_id if same_session else None
+        selected_axis_mode = current_session.selected_axis_mode if same_session else "elapsed"
+        selected_segment_id = current_session.selected_segment_id if same_session else None
         selected_compare_session_id = current_session.compare_session_id if same_session else None
+        if selected_axis_mode not in {"elapsed", "utc", "by_segment"}:
+            selected_axis_mode = "elapsed"
         if selected_context_id is not None and selected_context_id not in {group.context_id for group in replay_groups}:
             selected_context_id = None
         if selected_compare_session_id not in {item.session_id for item in compare_options}:
@@ -789,6 +910,7 @@ class AppPresenter:
 
         selected_group: _ReplayGroup | None = None
         primary_stats = None
+        matching_segments: list[_DerivedSegment] = []
         if selected_context_id is None and len(replay_groups) > 1:
             filtered_readings = []
             filtered_markers = markers
@@ -816,8 +938,36 @@ class AppPresenter:
             unit_text = next((reading.unit for reading in filtered_readings if reading.unit), "")
             context_label = "" if selected_group is None else selected_group.label
             reading_count_text = f"{len(filtered_readings)} readings"
+            matching_segments = [] if selected_group is None else [
+                segment for segment in derived_segments if segment.context_id == selected_group.context_id
+            ]
+            if selected_axis_mode == "by_segment" and matching_segments:
+                segment_ids = {segment.segment_id for segment in matching_segments}
+                if selected_segment_id not in segment_ids:
+                    selected_segment_id = matching_segments[0].segment_id
+                active_segment = next((segment for segment in matching_segments if segment.segment_id == selected_segment_id), None)
+                if active_segment is not None:
+                    filtered_readings = list(active_segment.readings)
+                    if active_segment.normalization_key is not None and unit_text:
+                        filtered_readings = _normalize_readings_to_unit(
+                            filtered_readings,
+                            active_segment.normalization_key,
+                            unit_text,
+                        )
+                    filtered_markers = [
+                        marker
+                        for marker in filtered_markers
+                        if active_segment.start_utc <= marker.timestamp_utc <= active_segment.end_utc
+                    ]
+                    primary_stats = summarize_readings(filtered_readings)
+                    selected_summary_text = f"{_summary_text(primary_stats)} | {active_segment.label} segment"
+                    context_label = f"{selected_group.label} | {active_segment.label}"
+                    reading_count_text = f"{len(filtered_readings)} readings"
+            else:
+                selected_segment_id = None
 
-        points = tuple(_chart_points(filtered_readings))
+        chart_axis_mode = "elapsed" if selected_axis_mode == "by_segment" else selected_axis_mode
+        points = tuple(_chart_points(filtered_readings, axis_mode=chart_axis_mode))
         compare_points: tuple[tuple[float, float], ...] = ()
         compare_summary_text = ""
         compare_session_label = ""
@@ -827,7 +977,9 @@ class AppPresenter:
                 selected_compare_session_id = None
             else:
                 compare_session_label = compare_session.title or compare_session.session_id
-                if selected_group is None or primary_stats is None:
+                if selected_axis_mode == "by_segment":
+                    compare_summary_text = "Comparison unavailable while viewing a single segment."
+                elif selected_group is None or primary_stats is None:
                     compare_summary_text = "Select a measurement view to compare mixed sessions."
                 else:
                     compare_readings_all = self._store.readings.list_for_session(selected_compare_session_id)
@@ -843,7 +995,7 @@ class AppPresenter:
                             compare_group,
                             unit_text or selected_group.display_unit,
                         )
-                        compare_points = tuple(_chart_points(compare_readings))
+                        compare_points = tuple(_chart_points(compare_readings, axis_mode=chart_axis_mode))
                         compare_stats = summarize_readings(compare_readings)
                         compare_summary_text = _comparison_summary_text(
                             compare_session_label,
@@ -852,7 +1004,7 @@ class AppPresenter:
                             unit_text or selected_group.display_unit,
                         )
 
-        marker_points = tuple(_marker_points(filtered_readings, filtered_markers))
+        marker_points = tuple(_marker_points(filtered_readings, filtered_markers, axis_mode=chart_axis_mode))
         marker_rows = tuple(_marker_vm(marker) for marker in filtered_markers)
         contexts = tuple(
             SessionContextViewModel(
@@ -862,22 +1014,36 @@ class AppPresenter:
             )
             for group in replay_groups
         )
+        segment_rows = tuple(
+            SessionSegmentViewModel(
+                segment_id=segment.segment_id,
+                label=segment.label,
+                display_text=f"{segment.label} | {segment.start_utc.astimezone(timezone.utc).strftime('%H:%M:%S UTC')} | {len(segment.readings)} readings",
+            )
+            for segment in matching_segments
+        )
+        chart_x_mode, chart_x_title = _chart_axis_details(chart_axis_mode)
         with self._lock:
             self._session = replace(
                 self._session,
                 selected_session_id=session_id,
                 selected_context_id=selected_context_id,
                 selected_context_label=context_label,
+                selected_axis_mode=selected_axis_mode,
+                selected_segment_id=selected_segment_id,
                 compare_session_id=selected_compare_session_id,
                 compare_session_label=compare_session_label,
                 active_title_text=session.title or session.session_id,
                 reading_count_text=reading_count_text,
                 available_contexts=contexts if len(contexts) > 1 else (),
+                available_segments=segment_rows if selected_axis_mode == "by_segment" and len(segment_rows) > 1 else segment_rows if selected_axis_mode == "by_segment" else (),
                 available_compare_sessions=compare_options,
                 selected_summary_text=selected_summary_text,
                 compare_summary_text=compare_summary_text,
                 selected_unit_text=unit_text,
                 selected_session_notes=session.notes or "",
+                chart_x_mode=chart_x_mode,
+                chart_x_title=chart_x_title,
                 selected_markers=marker_rows,
                 chart_points=points,
                 compare_chart_points=compare_points,
@@ -889,7 +1055,7 @@ class AppPresenter:
         if session_id is None:
             return
         with self._lock:
-            self._session = replace(self._session, selected_context_id=context_id)
+            self._session = replace(self._session, selected_context_id=context_id, selected_segment_id=None)
         self.select_session(session_id)
 
     def select_compare_session(self, session_id: str | None) -> None:
@@ -900,6 +1066,34 @@ class AppPresenter:
             self._session = replace(self._session, compare_session_id=session_id)
         self.select_session(selected_session_id)
 
+    def select_live_chart_mode(self, chart_mode: str) -> None:
+        with self._lock:
+            if chart_mode != self._live_chart_mode:
+                self._live_segment_started_at = datetime.now(timezone.utc)
+                self._live = replace(
+                    self._live,
+                    chart_notice_text=f"Live chart mode changed to {_live_chart_mode_label(chart_mode)}.",
+                )
+            self._live_chart_mode = chart_mode
+            self._live = replace(self._live, selected_chart_mode=chart_mode)
+            self._refresh_live_chart_locked()
+
+    def select_session_axis_mode(self, axis_mode: str) -> None:
+        session_id = self.session_view_model().selected_session_id
+        if session_id is None:
+            return
+        with self._lock:
+            self._session = replace(self._session, selected_axis_mode=axis_mode, selected_segment_id=None)
+        self.select_session(session_id)
+
+    def select_session_segment(self, segment_id: str | None) -> None:
+        session_id = self.session_view_model().selected_session_id
+        if session_id is None:
+            return
+        with self._lock:
+            self._session = replace(self._session, selected_segment_id=segment_id)
+        self.select_session(session_id)
+
     def on_reading(self, reading: Reading) -> None:
         value = "--" if reading.value is None else f"{reading.value:.6g}"
         timestamp = reading.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
@@ -907,18 +1101,16 @@ class AppPresenter:
         banner_text = ""
         self._last_reading_time = datetime.now(timezone.utc)
         alert_marker_message: str | None = None
+        auto_commit_capture = False
+        refresh_workflow_vm = False
         with self._lock:
             if self._live_context_key is not None and context_key != self._live_context_key:
-                self._reset_live_chart_state(reading.timestamp_utc)
-                banner_text = f"Live chart reset after meter mode changed to {_reading_context_label(reading)}."
+                self._live_segment_started_at = reading.timestamp_utc
+                banner_text = f"Live chart reset: meter mode changed to {_reading_context_label(reading)}."
             elif self._live_context_key is None:
-                self._chart_t0 = reading.timestamp_utc
+                self._live_segment_started_at = reading.timestamp_utc
             self._live_context_key = context_key
             self._live_readings.append(reading)
-            if reading.value is not None and self._chart_t0 is not None:
-                x_value = max((reading.timestamp_utc - self._chart_t0).total_seconds(), 0.0)
-                self._live_points.append((x_value, reading.value))
-            live_stats = summarize_readings(self._live_readings[-300:])
             active_session = self._recorder.active_session()
             is_logging = active_session is not None
             session_title = None if active_session is None else (active_session.title or active_session.session_id)
@@ -933,11 +1125,17 @@ class AppPresenter:
                 chart_notice_text=banner_text or self._live.chart_notice_text,
                 is_logging=is_logging,
                 last_updated_text=timestamp,
-                summary_text=_summary_text(live_stats),
                 marker_count_text=f"{self._recorder.marker_count()} markers",
-                chart_points=tuple(self._live_points),
-                marker_points=tuple(self._live_marker_points),
             )
+            self._refresh_live_chart_locked()
+            active_workflow = self._workflow_runner.active_state()
+            if active_workflow is not None and active_workflow.current_step is not None:
+                step = active_workflow.current_step
+                if step.requires_reading:
+                    auto_commit_capture = self._track_workflow_capture_locked(step, reading)
+                else:
+                    self._workflow = replace(self._workflow, latest_capture_text=f"Latest live reading: {reading.display_text}")
+                refresh_workflow_vm = True
             # Alert threshold check
             alert_active = False
             alert_message = ""
@@ -972,10 +1170,15 @@ class AppPresenter:
                 self._session,
                 reading_count_text=f"{self._recorder.reading_count()} readings",
             )
-            if self._workflow.is_running:
-                self._workflow = replace(self._workflow, latest_capture_text=f"Latest live reading: {reading.display_text}")
         if alert_marker_message is not None:
             self._record_system_marker(alert_marker_message, label="alert")
+        if auto_commit_capture:
+            try:
+                self.complete_workflow_step()
+            except Exception as exc:
+                self.report_error(str(exc))
+        elif refresh_workflow_vm:
+            self.refresh_workflows()
 
     def set_alert_thresholds(self, low: float | None, high: float | None) -> None:
         """Set (or clear) value-based alert thresholds."""
@@ -1389,12 +1592,97 @@ class AppPresenter:
             )
 
     def _reset_live_chart_state(self, start_at: datetime | None = None) -> None:
-        self._chart_t0 = start_at
         self._live_context_key = None
-        self._live_points.clear()
-        self._live_marker_points.clear()
-        self._live_readings = []
+        self._live_segment_started_at = start_at
+        self._live_readings.clear()
+        self._live_markers = []
         self._last_reading_time = None
+        self._reset_workflow_capture_runtime()
+
+    def _reset_workflow_capture_runtime(self) -> None:
+        self._workflow_capture = _WorkflowCaptureRuntime()
+
+    def _refresh_live_chart_locked(self) -> None:
+        active_session = self._recorder.active_session()
+        session_start = None if active_session is None else active_session.started_at
+        chart_readings = _live_chart_readings(
+            list(self._live_readings),
+            self._live_context_key,
+            self._live_chart_mode,
+            self._live_segment_started_at,
+            session_start,
+        )
+        current_context_id = "" if not chart_readings else _replay_descriptor(chart_readings[-1]).context_id
+        chart_markers = _markers_for_context(list(self._live_readings), self._live_markers, current_context_id)
+        marker_points = _marker_points(chart_readings, chart_markers, axis_mode="elapsed")
+        live_stats = summarize_readings(chart_readings)
+        chart_x_mode, chart_x_title = _chart_axis_details("elapsed")
+        self._live = replace(
+            self._live,
+            selected_chart_mode=self._live_chart_mode,
+            chart_x_mode=chart_x_mode,
+            chart_x_title=chart_x_title,
+            summary_text=_summary_text(live_stats),
+            chart_points=tuple(_chart_points(chart_readings, axis_mode="elapsed")),
+            marker_points=tuple(marker_points),
+        )
+
+    def _track_workflow_capture_locked(self, step: WorkflowStep, reading: Reading) -> bool:
+        capture = self._workflow_capture
+        if capture.step_id != step.step_id:
+            self._reset_workflow_capture_runtime()
+            capture = self._workflow_capture
+            capture.step_id = step.step_id
+
+        valid_reading = _valid_contact_reading(reading)
+        if not valid_reading:
+            capture.samples.clear()
+            capture.state = "no_contact"
+            capture.hint_text = "Waiting for a valid numeric reading."
+            return False
+        try:
+            self._workflow_runner.validate_reading_for_step(step, reading)
+        except RuntimeError as exc:
+            capture.samples.clear()
+            capture.state = "no_contact"
+            capture.hint_text = str(exc)
+            return False
+
+        if capture.pending_reading is not None:
+            capture.state = "captured"
+            capture.hint_text = f"Captured {capture.pending_reading.display_text}. Continue or retake."
+            return False
+
+        if step.interaction_mode == WorkflowInteractionMode.COUNTDOWN_CAPTURE:
+            if capture.countdown_deadline is None:
+                capture.state = "contact_detected"
+                capture.hint_text = "Press Capture Now to start the countdown."
+                return False
+            remaining = max((capture.countdown_deadline - datetime.now(timezone.utc)).total_seconds(), 0.0)
+            if remaining > 0:
+                capture.state = "settling"
+                capture.hint_text = f"Countdown: {remaining:.1f}s"
+                return False
+            capture.pending_reading = reading
+            capture.state = "captured"
+            capture.hint_text = f"Captured {reading.display_text}."
+            return step.advance_on_capture
+
+        capture.samples.append(reading)
+        if len(capture.samples) == 1:
+            capture.state = "contact_detected"
+            capture.hint_text = "Contact detected. Hold steady."
+            return False
+
+        stable, hint_text = _stable_capture_status(list(capture.samples), step.capture_settings)
+        capture.state = "stable" if stable else "settling"
+        capture.hint_text = hint_text
+        if not stable:
+            return False
+        capture.pending_reading = capture.samples[-1]
+        capture.state = "captured"
+        capture.hint_text = f"Captured {capture.pending_reading.display_text}."
+        return step.advance_on_capture
 
     def _finish_workflow_if_complete(self, state: WorkflowRunState) -> None:
         if state.run.result != WorkflowRunResult.COMPLETED:
@@ -1711,33 +1999,100 @@ def _choose_display_unit(normalization_key: str, base_values: list[float | None]
 
 
 def _markers_for_context(readings: list[Reading], markers: list[SessionMarker], context_id: str) -> list[SessionMarker]:
-    if not readings or not markers:
+    if not readings or not markers or not context_id:
+        return []
+    numeric_readings = [reading for reading in readings if reading.value is not None]
+    if not numeric_readings:
         return []
     selected: list[SessionMarker] = []
     reading_index = 0
-    current_context_id = _replay_descriptor(readings[reading_index]).context_id
+    current_context_id = _replay_descriptor(numeric_readings[reading_index]).context_id
     for marker in markers:
-        while reading_index + 1 < len(readings) and readings[reading_index + 1].timestamp_utc <= marker.timestamp_utc:
+        while (
+            reading_index + 1 < len(numeric_readings)
+            and numeric_readings[reading_index + 1].timestamp_utc <= marker.timestamp_utc
+        ):
             reading_index += 1
-            current_context_id = _replay_descriptor(readings[reading_index]).context_id
+            current_context_id = _replay_descriptor(numeric_readings[reading_index]).context_id
         if current_context_id == context_id:
             selected.append(marker)
     return selected
 
 
-def _chart_points(readings: list[Reading]) -> list[tuple[float, float]]:
+def _derive_mode_segments(readings: list[Reading], *, gap_threshold_s: float = 5.0) -> list[_DerivedSegment]:
+    segments: list[_DerivedSegment] = []
+    current: list[Reading] = []
+    current_descriptor: _ReplayDescriptor | None = None
+    for reading in readings:
+        if reading.value is None:
+            continue
+        descriptor = _replay_descriptor(reading)
+        if not current:
+            current = [reading]
+            current_descriptor = descriptor
+            continue
+        gap_s = max((reading.timestamp_utc - current[-1].timestamp_utc).total_seconds(), 0.0)
+        if descriptor.context_id != current_descriptor.context_id or gap_s > gap_threshold_s:
+            normalized = _normalize_replay_group(current, current_descriptor)
+            segments.append(
+                _DerivedSegment(
+                    segment_id=f"segment_{len(segments) + 1}",
+                    segment_index=len(segments) + 1,
+                    context_id=current_descriptor.context_id,
+                    label=current_descriptor.label,
+                    normalization_key=current_descriptor.normalization_key,
+                    measurement_type=normalized[0].measurement_type.value if normalized else "unknown",
+                    unit=next((item.unit for item in normalized if item.unit), ""),
+                    mode=normalized[0].mode if normalized else "",
+                    start_utc=normalized[0].timestamp_utc,
+                    end_utc=normalized[-1].timestamp_utc,
+                    readings=tuple(normalized),
+                )
+            )
+            current = [reading]
+            current_descriptor = descriptor
+            continue
+        current.append(reading)
+    if current and current_descriptor is not None:
+        normalized = _normalize_replay_group(current, current_descriptor)
+        segments.append(
+            _DerivedSegment(
+                segment_id=f"segment_{len(segments) + 1}",
+                segment_index=len(segments) + 1,
+                context_id=current_descriptor.context_id,
+                label=current_descriptor.label,
+                normalization_key=current_descriptor.normalization_key,
+                measurement_type=normalized[0].measurement_type.value if normalized else "unknown",
+                unit=next((item.unit for item in normalized if item.unit), ""),
+                mode=normalized[0].mode if normalized else "",
+                start_utc=normalized[0].timestamp_utc,
+                end_utc=normalized[-1].timestamp_utc,
+                readings=tuple(normalized),
+            )
+        )
+    return segments
+
+
+def _chart_points(readings: list[Reading], *, axis_mode: str = "elapsed") -> list[tuple[float, float]]:
     numeric = [reading for reading in readings if reading.value is not None]
     if not numeric:
         return []
+    if axis_mode == "utc":
+        return [
+            (reading.timestamp_utc.timestamp() * 1000.0, float(reading.value))
+            for reading in numeric
+            if reading.value is not None
+        ]
     start = numeric[0].timestamp_utc
-    return [
-        (max((reading.timestamp_utc - start).total_seconds(), 0.0), float(reading.value))
-        for reading in numeric
-        if reading.value is not None
-    ]
+    return [(max((reading.timestamp_utc - start).total_seconds(), 0.0), float(reading.value)) for reading in numeric]
 
 
-def _marker_points(readings: list[Reading], markers: list[SessionMarker]) -> list[tuple[float, float]]:
+def _marker_points(
+    readings: list[Reading],
+    markers: list[SessionMarker],
+    *,
+    axis_mode: str = "elapsed",
+) -> list[tuple[float, float]]:
     numeric = [reading for reading in readings if reading.value is not None]
     if not numeric:
         return []
@@ -1749,8 +2104,87 @@ def _marker_points(readings: list[Reading], markers: list[SessionMarker]) -> lis
         while numeric_index + 1 < len(numeric) and numeric[numeric_index + 1].timestamp_utc <= marker.timestamp_utc:
             numeric_index += 1
             current_value = float(numeric[numeric_index].value)
-        marker_values.append((max((marker.timestamp_utc - start).total_seconds(), 0.0), current_value))
+        x_value = (
+            marker.timestamp_utc.timestamp() * 1000.0
+            if axis_mode == "utc"
+            else max((marker.timestamp_utc - start).total_seconds(), 0.0)
+        )
+        marker_values.append((x_value, current_value))
     return marker_values
+
+
+def _chart_axis_details(axis_mode: str) -> tuple[str, str]:
+    if axis_mode == "utc":
+        return "datetime", "UTC"
+    return "elapsed", "Seconds"
+
+
+def _live_chart_mode_label(chart_mode: str) -> str:
+    mapping = {
+        "rolling_30s": "Rolling 30s",
+        "rolling_60s": "Rolling 60s",
+        "rolling_5m": "Rolling 5m",
+        "since_mode_start": "Since mode start",
+        "since_session_start": "Since session start",
+    }
+    return mapping.get(chart_mode, chart_mode.replace("_", " "))
+
+
+def _live_chart_readings(
+    readings: list[Reading],
+    context_key: tuple[str, str, str] | None,
+    chart_mode: str,
+    segment_started_at: datetime | None,
+    session_started_at: datetime | None,
+) -> list[Reading]:
+    if context_key is None:
+        return []
+    filtered = [
+        reading
+        for reading in readings
+        if reading.value is not None and _reading_context_key(reading) == context_key
+    ]
+    if not filtered:
+        return []
+    latest_ts = filtered[-1].timestamp_utc
+    if chart_mode == "rolling_30s":
+        cutoff = latest_ts - timedelta(seconds=30)
+        return [reading for reading in filtered if reading.timestamp_utc >= cutoff]
+    if chart_mode == "rolling_60s":
+        cutoff = latest_ts - timedelta(seconds=60)
+        return [reading for reading in filtered if reading.timestamp_utc >= cutoff]
+    if chart_mode == "rolling_5m":
+        cutoff = latest_ts - timedelta(minutes=5)
+        return [reading for reading in filtered if reading.timestamp_utc >= cutoff]
+    if chart_mode == "since_mode_start" and segment_started_at is not None:
+        return [reading for reading in filtered if reading.timestamp_utc >= segment_started_at]
+    if chart_mode == "since_session_start" and session_started_at is not None:
+        return [reading for reading in filtered if reading.timestamp_utc >= session_started_at]
+    return filtered
+
+
+def _valid_contact_reading(reading: Reading) -> bool:
+    return (
+        reading.value is not None
+        and reading.status not in {ReadingStatus.INVALID, ReadingStatus.NO_SIGNAL}
+    )
+
+
+def _stable_capture_status(readings: list[Reading], settings: WorkflowCaptureSettings) -> tuple[bool, str]:
+    numeric = [reading for reading in readings if reading.value is not None]
+    if len(numeric) < settings.min_samples:
+        return False, f"Collecting samples ({len(numeric)}/{settings.min_samples})."
+    duration_s = max((numeric[-1].timestamp_utc - numeric[0].timestamp_utc).total_seconds(), 0.0)
+    if duration_s < settings.stable_for_s:
+        return False, f"Settling for {settings.stable_for_s:.2f}s."
+    values = [float(reading.value) for reading in numeric]
+    reference = max(abs(values[-1]), 1.0)
+    tolerance = settings.absolute_tolerance
+    if tolerance is None:
+        tolerance = reference * settings.relative_tolerance
+    if max(values) - min(values) <= tolerance:
+        return True, f"Stable for {duration_s:.2f}s."
+    return False, "Reading still moving."
 
 
 def _workflow_definition_vm(definition: WorkflowDefinition) -> WorkflowDefinitionViewModel:
@@ -1835,6 +2269,7 @@ def _workflow_definition_report_text(definition: WorkflowDefinition) -> str:
         lines.append(f"{index}. {step.title}")
         if step.instruction:
             lines.append(f"   Instruction: {step.instruction}")
+        lines.append(f"   Mode: {_workflow_interaction_mode_text(step)}")
         lines.append(f"   Requirement: {_workflow_requirement_text(step)}")
         if step.note_prompt:
             lines.append(f"   Note prompt: {step.note_prompt}")
@@ -1898,6 +2333,7 @@ def _workflow_report_text(
         lines.append(f"{index}. {step.title}")
         if step.instruction:
             lines.append(f"   Instruction: {step.instruction}")
+        lines.append(f"   Mode: {_workflow_interaction_mode_text(step)}")
         lines.append(f"   Requirement: {_workflow_requirement_text(step)}")
         result = results_by_step.get(step.step_id)
         if result is None:
@@ -1916,13 +2352,20 @@ def _workflow_report_text(
 
 
 def _workflow_requirement_text(step: WorkflowStep) -> str:
-    if not step.capture:
+    if not step.requires_reading:
+        if step.interaction_mode == WorkflowInteractionMode.OBSERVE_AND_CONFIRM:
+            return "Observe and confirm manually"
         return "Manual checklist step"
     fragments = ["Capture the current live reading"]
+    if step.interaction_mode == WorkflowInteractionMode.STABLE_CAPTURE:
+        fragments.append(f"auto-capture once stable for {step.capture_settings.stable_for_s:.2f}s")
+    elif step.interaction_mode == WorkflowInteractionMode.COUNTDOWN_CAPTURE:
+        fragments.append(f"capture after {step.capture_settings.countdown_s:.1f}s countdown")
     if step.expected_measurement_type is not None:
         fragments.append(f"type {step.expected_measurement_type.value}")
     if step.expected_unit:
         fragments.append(f"unit {step.expected_unit}")
+    fragments.append("auto-advance" if step.advance_on_capture else "pause for continue/retake")
     return " | ".join(fragments)
 
 
@@ -1945,6 +2388,28 @@ def _latest_capture_text(results: tuple[WorkflowStepResult, ...] | list[Workflow
     return "No captured step yet"
 
 
+def _capture_state_text(state: str) -> str:
+    mapping = {
+        "idle": "",
+        "no_contact": "No contact",
+        "contact_detected": "Contact detected",
+        "settling": "Settling",
+        "stable": "Stable",
+        "captured": "Captured",
+    }
+    return mapping.get(state, state.replace("_", " ").title())
+
+
+def _workflow_interaction_mode_text(step: WorkflowStep) -> str:
+    mapping = {
+        WorkflowInteractionMode.MANUAL_CHECK: "Manual Check",
+        WorkflowInteractionMode.STABLE_CAPTURE: "Stable Capture",
+        WorkflowInteractionMode.COUNTDOWN_CAPTURE: "Countdown Capture",
+        WorkflowInteractionMode.OBSERVE_AND_CONFIRM: "Observe And Confirm",
+    }
+    return mapping.get(step.interaction_mode, step.interaction_mode.value.replace("_", " ").title())
+
+
 def _workflow_definition_payload(definition: WorkflowDefinition) -> dict[str, object]:
     payload: dict[str, object] = {
         "workflow_id": definition.workflow_id,
@@ -1964,6 +2429,8 @@ def _workflow_definition_payload(definition: WorkflowDefinition) -> dict[str, ob
             "title": step.title,
             "instruction": step.instruction,
             "capture": step.capture,
+            "interaction_mode": step.interaction_mode.value,
+            "advance_on_capture": step.advance_on_capture,
         }
         if step.expected_measurement_type is not None:
             row["expected_measurement_type"] = _measurement_type_value(step.expected_measurement_type)
@@ -1971,6 +2438,14 @@ def _workflow_definition_payload(definition: WorkflowDefinition) -> dict[str, ob
             row["expected_unit"] = step.expected_unit
         if step.note_prompt:
             row["note_prompt"] = step.note_prompt
+        if step.requires_reading:
+            row["capture_settings"] = {
+                "stable_for_s": step.capture_settings.stable_for_s,
+                "min_samples": step.capture_settings.min_samples,
+                "relative_tolerance": step.capture_settings.relative_tolerance,
+                "absolute_tolerance": step.capture_settings.absolute_tolerance,
+                "countdown_s": step.capture_settings.countdown_s,
+            }
         if step.metadata:
             row["metadata"] = dict(step.metadata)
         step_payloads.append(row)

@@ -3,7 +3,14 @@ from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 from fluke_core.models.session_stats import SessionStatistics
-from fluke_core.models.workflow import WorkflowDefinition, WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
+from fluke_core.models.workflow import (
+    WorkflowCaptureSettings,
+    WorkflowDefinition,
+    WorkflowRun,
+    WorkflowRunState,
+    WorkflowStep,
+    WorkflowStepResult,
+)
 
 __all__ = [
     "DeviceInfo",
@@ -14,6 +21,7 @@ __all__ = [
     "WorkflowDefinition",
     "WorkflowRun",
     "WorkflowRunState",
+    "WorkflowCaptureSettings",
     "WorkflowStep",
     "WorkflowStepResult",
 ]

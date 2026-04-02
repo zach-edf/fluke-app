@@ -3,12 +3,23 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from statistics import median
 
 from fluke_app.ports import MarkerRepository, ReadingExporter, ReadingRepository, SessionRepository
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 from fluke_core.services.statistics import summarize_readings
+
+_UNKNOWN_REPLAY_THRESHOLD = 5
+_GAP_THRESHOLD_S = 5.0
+_UNIT_SCALES: dict[str, tuple[tuple[str, float], ...]] = {
+    "voltage": (("uV", 1e-6), ("mV", 1e-3), ("V", 1.0), ("kV", 1e3)),
+    "current": (("uA", 1e-6), ("mA", 1e-3), ("A", 1.0)),
+    "resistance": (("ohm", 1.0), ("kOhm", 1e3), ("MOhm", 1e6)),
+    "capacitance": (("pF", 1e-12), ("nF", 1e-9), ("uF", 1e-6), ("mF", 1e-3), ("F", 1.0)),
+    "frequency": (("Hz", 1.0), ("kHz", 1e3), ("MHz", 1e6)),
+}
 
 
 class ExportService:
@@ -35,6 +46,78 @@ class ExportService:
         if isinstance(self._json_exporter, SessionJsonExporter):
             self._json_exporter.set_markers(self._load_markers(session_id))
         return str(self._json_exporter.export(session, readings, Path(path)))
+
+    def export_analysis_csv(self, session_id: str, path: str | Path) -> str:
+        _session, readings = self._load(session_id)
+        export_path = Path(path)
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        groups = _build_replay_groups(readings)
+        headers = ["timestamp_utc"] + [
+            _analysis_column_name(group["context_id"], group["display_unit"])
+            for group in groups
+        ]
+        rows: list[dict[str, str | float | None]] = []
+        for group in groups:
+            column = _analysis_column_name(group["context_id"], group["display_unit"])
+            for reading in group["readings"]:
+                row: dict[str, str | float | None] = {
+                    "timestamp_utc": reading.timestamp_utc.isoformat(),
+                }
+                for header in headers[1:]:
+                    row[header] = None
+                row[column] = reading.value
+                rows.append(row)
+        rows.sort(
+            key=lambda row: (
+                str(row["timestamp_utc"]),
+                headers.index(
+                    next(
+                        (key for key in headers[1:] if row[key] is not None),
+                        headers[1] if len(headers) > 1 else "timestamp_utc",
+                    )
+                ),
+            )
+        )
+        with export_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        return str(export_path)
+
+    def export_segment_summary_json(self, session_id: str, path: str | Path) -> str:
+        session, readings = self._load(session_id)
+        markers = self._load_markers(session_id)
+        export_path = Path(path)
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        segments = _derive_segments(readings)
+        payload = {
+            "session": {
+                "session_id": session.session_id,
+                "device_id": session.device_id,
+                "started_at": session.started_at.isoformat(),
+                "ended_at": None if session.ended_at is None else session.ended_at.isoformat(),
+                "title": session.title,
+                "notes": session.notes,
+                "tags": list(session.tags),
+                "app_version": session.app_version,
+                "profile_id": session.profile_id,
+            },
+            "segment_count": len(segments),
+            "segments": [_segment_payload(segment, markers) for segment in segments],
+            "markers": [
+                {
+                    "marker_id": marker.marker_id,
+                    "timestamp_utc": marker.timestamp_utc.isoformat(),
+                    "label": marker.label,
+                    "note": marker.note,
+                    "source": marker.source,
+                }
+                for marker in markers
+            ],
+        }
+        export_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        return str(export_path)
 
     def _load(self, session_id: str) -> tuple[object, list[object]]:
         session = self._session_repo.get(session_id)
@@ -164,3 +247,251 @@ class SessionJsonExporter:
         }
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
         return path
+
+
+def _analysis_column_name(context_id: str, display_unit: str) -> str:
+    base = context_id.replace(":", "_")
+    suffix = str(display_unit or "value").strip().lower().replace("+", "plus").replace("%", "pct")
+    suffix = "".join(ch if ch.isalnum() else "_" for ch in suffix).strip("_")
+    return f"{base}_{suffix}" if suffix else base
+
+
+def _build_replay_groups(readings: list[Reading]) -> list[dict[str, object]]:
+    grouped: dict[str, list[Reading]] = {}
+    labels: dict[str, str] = {}
+    normalization_keys: dict[str, str | None] = {}
+    for reading in readings:
+        context_id, label, normalization_key, is_unknown = _context_descriptor(reading)
+        current = grouped.setdefault(context_id, [])
+        current.append(reading)
+        labels[context_id] = label
+        normalization_keys[context_id] = normalization_key
+        if is_unknown:
+            labels.setdefault(context_id, "Unknown / Transitional")
+
+    has_known_groups = any(context_id != "unknown" for context_id in grouped)
+    groups: list[dict[str, object]] = []
+    for context_id, raw_group in grouped.items():
+        numeric_count = sum(1 for reading in raw_group if reading.value is not None)
+        if numeric_count == 0:
+            continue
+        if context_id == "unknown" and has_known_groups and len(raw_group) <= _UNKNOWN_REPLAY_THRESHOLD:
+            continue
+        normalization_key = normalization_keys[context_id]
+        normalized = _normalize_group(raw_group, normalization_key)
+        display_unit = next((reading.unit for reading in normalized if reading.unit), "")
+        groups.append(
+            {
+                "context_id": context_id,
+                "label": labels[context_id],
+                "readings": normalized,
+                "display_unit": display_unit,
+            }
+        )
+    groups.sort(key=lambda item: (-len(item["readings"]), str(item["label"])))
+    return groups
+
+
+def _derive_segments(readings: list[Reading]) -> list[dict[str, object]]:
+    segments: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for reading in readings:
+        context_id, label, normalization_key, _ = _context_descriptor(reading)
+        if reading.value is None:
+            continue
+        if current is None:
+            current = {
+                "context_id": context_id,
+                "label": label,
+                "normalization_key": normalization_key,
+                "raw_readings": [reading],
+            }
+            continue
+        previous = current["raw_readings"][-1]
+        gap_s = max((reading.timestamp_utc - previous.timestamp_utc).total_seconds(), 0.0)
+        if current["context_id"] != context_id or gap_s > _GAP_THRESHOLD_S:
+            segments.append(current)
+            current = {
+                "context_id": context_id,
+                "label": label,
+                "normalization_key": normalization_key,
+                "raw_readings": [reading],
+            }
+            continue
+        current["raw_readings"].append(reading)
+    if current is not None:
+        segments.append(current)
+
+    finalized: list[dict[str, object]] = []
+    for index, segment in enumerate(segments, start=1):
+        raw_readings = list(segment["raw_readings"])
+        normalized = _normalize_group(raw_readings, segment["normalization_key"])
+        display_unit = next((reading.unit for reading in normalized if reading.unit), "")
+        finalized.append(
+            {
+                "segment_id": f"segment_{index}",
+                "segment_index": index,
+                "context_id": segment["context_id"],
+                "label": segment["label"],
+                "measurement_type": normalized[0].measurement_type.value if normalized else "unknown",
+                "unit": display_unit,
+                "mode": normalized[0].mode if normalized else "",
+                "readings": normalized,
+                "start_utc": normalized[0].timestamp_utc if normalized else None,
+                "end_utc": normalized[-1].timestamp_utc if normalized else None,
+            }
+        )
+    return finalized
+
+
+def _segment_payload(segment: dict[str, object], markers: list[SessionMarker]) -> dict[str, object]:
+    readings = list(segment["readings"])
+    stats = summarize_readings(readings)
+    start_utc = segment["start_utc"]
+    end_utc = segment["end_utc"]
+    segment_markers = [
+        {
+            "marker_id": marker.marker_id,
+            "timestamp_utc": marker.timestamp_utc.isoformat(),
+            "label": marker.label,
+            "note": marker.note,
+            "source": marker.source,
+        }
+        for marker in markers
+        if start_utc is not None and end_utc is not None and start_utc <= marker.timestamp_utc <= end_utc
+    ]
+    return {
+        "segment_id": segment["segment_id"],
+        "segment_index": segment["segment_index"],
+        "context_id": segment["context_id"],
+        "label": segment["label"],
+        "measurement_type": segment["measurement_type"],
+        "unit": segment["unit"],
+        "mode": segment["mode"],
+        "start_utc": None if start_utc is None else start_utc.isoformat(),
+        "end_utc": None if end_utc is None else end_utc.isoformat(),
+        "sample_count": len(readings),
+        "statistics": {
+            "reading_count": stats.reading_count,
+            "numeric_count": stats.numeric_count,
+            "min_value": stats.min_value,
+            "max_value": stats.max_value,
+            "avg_value": stats.avg_value,
+            "duration_s": stats.duration_s,
+        },
+        "markers": segment_markers,
+    }
+
+
+def _context_descriptor(reading: Reading) -> tuple[str, str, str | None, bool]:
+    measurement_type = reading.measurement_type
+    unit_family = str(reading.metadata.get("unit_family") or "").strip().lower()
+
+    if measurement_type.value == "voltage_ac":
+        return "voltage_ac", "Voltage AC", "voltage", False
+    if measurement_type.value == "voltage_dc":
+        return "voltage_dc", "Voltage DC", "voltage", False
+    if measurement_type.value == "current_ac":
+        return "current_ac", "Current AC", "current", False
+    if measurement_type.value == "current_dc":
+        return "current_dc", "Current DC", "current", False
+    if measurement_type.value == "current_ac_dc":
+        return "current_acdc", "Current AC+DC", "current", False
+    if measurement_type.value == "current_inrush":
+        return "current_inrush", "Current Inrush", "current", False
+    if measurement_type.value == "resistance":
+        return "resistance", "Resistance", "resistance", False
+    if measurement_type.value == "capacitance":
+        return "capacitance", "Capacitance", "capacitance", False
+    if measurement_type.value == "frequency":
+        return "frequency", "Frequency", "frequency", False
+    if measurement_type.value == "duty_cycle":
+        return "duty_cycle", "Duty Cycle", None, False
+    if measurement_type.value == "temperature":
+        context_id = f"temperature:{reading.unit or 'unknown'}"
+        return context_id, f"Temperature {reading.unit}".strip(), None, False
+    if measurement_type.value == "continuity":
+        return "continuity", "Continuity", None, False
+
+    if unit_family == "voltage":
+        if reading.mode == "ac":
+            return "voltage_ac", "Voltage AC", "voltage", False
+        if reading.mode == "dc" or reading.unit == "mV":
+            return "voltage_dc", "Voltage DC", "voltage", False
+        return "voltage", "Voltage", "voltage", False
+    if unit_family == "current":
+        if reading.mode == "ac":
+            return "current_ac", "Current AC", "current", False
+        if reading.mode == "dc":
+            return "current_dc", "Current DC", "current", False
+        if reading.mode == "acdc":
+            return "current_acdc", "Current AC+DC", "current", False
+        return "current", "Current", "current", False
+    if unit_family == "resistance":
+        return "resistance", "Resistance", "resistance", False
+    if unit_family == "capacitance":
+        return "capacitance", "Capacitance", "capacitance", False
+    if unit_family == "frequency":
+        return "frequency", "Frequency", "frequency", False
+    if unit_family == "duty_cycle":
+        return "duty_cycle", "Duty Cycle", None, False
+    if unit_family == "temperature":
+        context_id = f"temperature:{reading.unit or 'unknown'}"
+        return context_id, f"Temperature {reading.unit}".strip(), None, False
+
+    return "unknown", "Unknown / Transitional", None, True
+
+
+def _normalize_group(readings: list[Reading], normalization_key: str | None) -> list[Reading]:
+    if normalization_key is None:
+        return list(readings)
+    unit_scale = dict(_UNIT_SCALES[normalization_key])
+    base_values = [_base_unit_value(reading, normalization_key) for reading in readings if reading.value is not None]
+    display_unit = _choose_display_unit(normalization_key, base_values)
+    display_factor = unit_scale[display_unit]
+    normalized: list[Reading] = []
+    for reading in readings:
+        if reading.value is None:
+            normalized.append(reading)
+            continue
+        base_value = _base_unit_value(reading, normalization_key)
+        if base_value is None:
+            normalized.append(reading)
+            continue
+        normalized.append(Reading(
+            timestamp_utc=reading.timestamp_utc,
+            value=base_value / display_factor,
+            unit=display_unit,
+            measurement_type=reading.measurement_type,
+            status=reading.status,
+            display_text=reading.display_text,
+            source_device_id=reading.source_device_id,
+            mode=reading.mode,
+            raw_payload=reading.raw_payload,
+            metadata=dict(reading.metadata),
+        ))
+    return normalized
+
+
+def _base_unit_value(reading: Reading, normalization_key: str) -> float | None:
+    if reading.value is None:
+        return None
+    unit_scale = dict(_UNIT_SCALES.get(normalization_key, ()))
+    factor = unit_scale.get(reading.unit)
+    if factor is None:
+        return float(reading.value)
+    return float(reading.value) * factor
+
+
+def _choose_display_unit(normalization_key: str, base_values: list[float | None]) -> str:
+    units = _UNIT_SCALES[normalization_key]
+    numeric_values = [abs(value) for value in base_values if value is not None]
+    if not numeric_values:
+        return units[-1][0]
+    typical = median(numeric_values)
+    if typical == 0:
+        return units[-1][0]
+    for unit, factor in reversed(units):
+        if typical / factor >= 1:
+            return unit
+    return units[0][0]
