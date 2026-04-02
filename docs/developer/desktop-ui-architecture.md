@@ -180,8 +180,8 @@ The live tab is where most real-time behavior is visible.
 
 Key contributor details:
 
-- the live chart is driven by the presenter's in-memory point buffers
-- the chart resets when measurement context changes
+- the live chart is driven by the presenter's in-memory reading buffer and derived chart modes
+- measurement-context changes create a new derived boundary for the live chart
 - alert thresholds are configured from the view but evaluated in the presenter
 - session creation happens from presenter `start_logging(...)`
 - markers are recorded via the shared recorder
@@ -191,7 +191,7 @@ Important presenter-owned behaviors:
 - stale reading detection
 - reconnect state
 - alert trigger state
-- chart reset notices
+- live chart mode and context-change notices
 - session summary text
 
 ## Session Tab Internals
@@ -216,7 +216,8 @@ Key responsibilities:
 - list available workflow definitions
 - select definitions and recent runs
 - start workflow runs
-- complete/skip/cancel steps
+- complete/continue/retake/skip/cancel steps
+- surface capture state and staged readings
 - render historical run details
 - export workflow reports
 - launch the workflow builder dialog

@@ -37,7 +37,7 @@ Application orchestration:
 - `DeviceManager`
 - `SessionRecorder`
 - workflow catalog and runner
-- export services
+- export services for raw, analysis, and segment-summary outputs
 - debug bundle generation
 
 ### `packages/fluke_store`
@@ -52,6 +52,8 @@ Persistence layer:
 - `apps/cli`: scan, stream, log, export, plugins, fixtures, diagnostics
 - `apps/desktop`: PySide6-based home/discovery/live/session/workflow/settings UI
 - `packages/fluke_sdk`: Python API built on the same shared services
+
+The desktop presenter derives replay groups, live chart modes, and session segments from the raw stored reading stream instead of persisting separate segment tables.
 
 ## Extension Boundary
 

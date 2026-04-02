@@ -47,7 +47,11 @@ The desktop app includes several shortcuts:
 - `Ctrl+1` through `Ctrl+6`: switch tabs
 - `Ctrl+L`: start or stop logging from the live view
 - `Ctrl+M`: focus the marker input on the live view
-- `Ctrl+E`: export the selected session as CSV
+- `Ctrl+E`: export the selected session as raw CSV
+- `Space`: trigger the primary workflow action for the current step
+- `Enter`: continue after a staged workflow capture
+- `R`: retake a staged workflow capture
+- `Esc`: cancel the active workflow
 
 ## Home Tab
 
@@ -101,6 +105,7 @@ The `Live Reading` tab is the main real-time monitoring screen.
 - reading status
 - connection state
 - live chart
+- chart mode selector
 - alert status
 - active session label
 - last update time
@@ -161,17 +166,22 @@ Behavior:
 
 ### Live chart behavior
 
-The live chart only plots a single measurement context cleanly at a time.
+The live chart still focuses on one measurement context at a time, but the visible plot is now derived from a larger in-memory buffer rather than a short fixed history.
 
-If the meter changes context, for example:
+Available chart modes:
 
-- a different measurement type
-- a different unit
-- a different mode
+- `Rolling 30s`
+- `Rolling 60s`
+- `Rolling 5m`
+- `Since mode start`
+- `Since session start`
 
-the chart resets and the app shows a banner explaining that the meter mode changed.
+Important behavior:
 
-This is intentional and prevents misleading mixed-unit or mixed-mode plots.
+- meter context changes still create a new derived boundary so the chart does not mix incompatible readings
+- changing chart mode shows a transient banner
+- `Since mode start` begins at the moment the current chart mode was selected
+- the app keeps enough buffered history to derive the other chart modes without rewriting stored session data
 
 ### Stale reading behavior
 
@@ -199,6 +209,9 @@ The `Session` tab is the review and export area for recorded sessions.
 - database path
 - export status text
 - replay chart
+- measurement view selector
+- axis mode selector
+- segment selector when using segment view
 - session notes
 - markers table
 
@@ -212,7 +225,7 @@ When you click a session in `Recent Sessions`, the app loads:
 - replay chart data
 - any measurement context groups available for replay filtering
 
-### Measurement View filter
+### Measurement View and axis controls
 
 The session replay view can derive filtered replay groups from mixed-mode sessions.
 
@@ -224,6 +237,14 @@ Important points:
 - the filtering is derived for replay purposes
 - `All Measurements` remains the mixed-session overview
 - if a session only has one meaningful replay group, the filter may not appear
+
+Axis modes:
+
+- `Elapsed Time`: replay points are plotted relative to the start of the selected view
+- `UTC Timestamp`: replay points are plotted on an absolute UTC time axis
+- `By Segment`: replay is limited to one derived segment and plotted relative to that segment's start
+
+Derived segments are computed on demand. A new segment starts when the normalized replay context changes or when there is a gap of more than five seconds between numeric readings.
 
 ### Compare Against
 
@@ -248,8 +269,10 @@ If no notes or markers exist, the page shows explicit empty-state placeholders.
 
 From the session page you can export:
 
-- session CSV
-- session JSON
+- `Export Raw CSV`
+- `Export Raw JSON`
+- `Export Analysis CSV`
+- `Export Segment Summary JSON`
 - session chart PNG
 
 The export path uses the current desktop export directory from `Settings`.
@@ -262,11 +285,13 @@ You can:
 
 - browse available workflow definitions
 - start a workflow
-- complete or skip steps
+- complete, continue, retake, skip, or cancel steps
 - cancel a workflow
 - review recent workflow runs
 - export a workflow report
 - create a new workflow definition from the GUI
+
+The workflow tab now surfaces the current step mode, capture state, and capture hint text. For capture steps that pause after staging a reading, the UI exposes dedicated `Continue` and `Retake` actions.
 
 Because workflows are a larger feature area, see [Workflows Page Guide](workflows-page.md) for the detailed behavior and authoring instructions.
 
@@ -287,8 +312,10 @@ The export directory setting controls where the desktop app writes generated fil
 
 Examples:
 
-- session CSV export from the session page
-- session JSON export from the session page
+- raw CSV export from the session page
+- raw JSON export from the session page
+- analysis CSV export from the session page
+- segment summary JSON export from the session page
 - session chart PNG export
 - live chart PNG export
 - workflow report export
@@ -347,6 +374,7 @@ As with the export directory, the current theme selection is not persisted acros
 - the desktop app currently uses the shared default database path; there is no GUI control yet to change the database location
 - export directory and theme changes are in-memory settings for the current run
 - workflow capture steps depend on a current live reading being available
+- session comparison is intentionally disabled while viewing `By Segment`
 - replay filters are derived from stored readings and may be hidden if a session does not contain enough distinct replay groups
 
 ## Related Guides

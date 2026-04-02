@@ -113,7 +113,9 @@ Important behavior:
 
 - raw readings remain stored exactly as captured
 - replay filters are derived for display only
+- derived segments are computed from replay context changes and long reading gaps
 - the session page can compare a selected replay view against another session if a matching replay context exists
+- per-segment view is intended for single-session inspection rather than cross-session overlay
 
 This means the UI improves replay clarity without mutating stored raw data.
 
@@ -121,7 +123,7 @@ This means the UI improves replay clarity without mutating stored raw data.
 
 The desktop app can generate several export types.
 
-### Session CSV
+### Raw CSV
 
 Generated from the `Session` tab.
 
@@ -129,13 +131,42 @@ Typical desktop file name:
 
 - `session-<SESSION_ID>.csv`
 
-### Session JSON
+This is the canonical sequential event export.
+
+### Raw JSON
 
 Generated from the `Session` tab.
 
 Typical desktop file name:
 
 - `session-<SESSION_ID>.json`
+
+This is the canonical structured session export with session metadata, readings, and markers.
+
+### Analysis CSV
+
+Generated from the `Session` tab.
+
+Typical desktop file name:
+
+- `session-<SESSION_ID>-analysis.csv`
+
+Shape:
+
+- one `timestamp_utc` column
+- one column per normalized measurement view
+- sparse rows are allowed
+- no resampling is performed
+
+### Segment Summary JSON
+
+Generated from the `Session` tab.
+
+Typical desktop file name:
+
+- `session-<SESSION_ID>-segments.json`
+
+This export includes session metadata, derived segments, per-segment statistics, and marker summaries grouped by segment.
 
 ### Session Chart PNG
 
@@ -190,6 +221,8 @@ Use:
 - `--format json`
 - `--output`
 
+The CLI currently exposes the raw export formats only. The analysis CSV and segment summary JSON exports are desktop-only in this phase.
+
 ### Workflow output
 
 The CLI workflow runner stores workflow runs in the database, but the interactive command does not currently export a Markdown workflow report file in the same way the desktop app does.
@@ -233,6 +266,11 @@ Difference:
 - workflow definition files describe what a workflow is
 - workflow run records describe how a specific execution of that workflow went
 
+Notes:
+
+- legacy files that only use `capture: true/false` still load
+- new files should prefer explicit `interaction_mode`, `advance_on_capture`, and `capture_settings`
+
 For workflow authoring details, see [Workflows Page Guide](workflows-page.md).
 
 ## Export Troubleshooting
@@ -243,7 +281,7 @@ Check:
 
 - the export directory in the desktop `Settings` tab
 - the explicit `--output` path passed on the CLI
-- whether you are looking for a chart PNG, session CSV/JSON, or workflow report
+- whether you are looking for a chart PNG, raw export, analysis export, segment summary export, or workflow report
 
 ### Session export fails
 
@@ -260,6 +298,14 @@ Check:
 - that a workflow run is selected
 - that a workflow run actually exists for the current selection
 - that the output directory is writable
+
+### Analysis or segment export looks different from the raw export
+
+That is expected.
+
+- raw CSV and raw JSON preserve the sequential event stream
+- analysis CSV reshapes readings into a sparse wide table
+- segment summary JSON groups derived segments and marker summaries for review
 
 ### A workflow exists but no run history appears
 

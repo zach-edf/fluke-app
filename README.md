@@ -24,8 +24,11 @@ What exists now:
 - normalized `Reading` model and 376 FC profile decoder
 - SQLite session, marker, workflow-run, and export support
 - desktop app with discovery, live view, charting, replay, markers, session export, and workflow runner
-  - live chart resets when the meter changes measurement context
+  - live view supports rolling and derived chart modes without rewriting stored data
   - session replay filters mixed-mode sessions into cleaner measurement views without rewriting raw data
+  - session replay supports elapsed-time, UTC, and per-segment chart axes
+  - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
+  - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow run history can be reviewed and exported as reports from the desktop UI
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, and debug bundle export
 - Python SDK on the same core stack
@@ -315,12 +318,21 @@ The Live Reading tab supports:
 - current reading display
 - unit and measurement type
 - live chart
+- chart mode selector
 - min / max / avg / sample summary
 - session start / stop
 - manual session markers
 - live chart PNG export
 
-To avoid misleading mixed-unit charts, the live chart automatically resets when the meter changes measurement context. The reset is keyed on `measurement_type`, `unit`, and `mode`, and the UI shows a small banner when that happens.
+The live chart now keeps a larger timestamped buffer and derives the visible plot from the selected chart mode:
+
+- `Rolling 30s`
+- `Rolling 60s`
+- `Rolling 5m`
+- `Since mode start`
+- `Since session start`
+
+When the meter changes measurement context, the live view starts a new derived segment and shows a transient banner. Changing chart mode also starts a new `Since mode start` boundary instead of discarding buffered readings.
 
 ### Session
 
@@ -329,9 +341,14 @@ The Session tab supports:
 - recent sessions
 - replay chart
 - measurement-view filtering for mixed-mode sessions
+- axis mode selection for `Elapsed Time`, `UTC Timestamp`, and `By Segment`
+- per-segment selection when viewing a derived segment axis
 - marker review
 - session notes
-- CSV / JSON export
+- `Export Raw CSV`
+- `Export Raw JSON`
+- `Export Analysis CSV`
+- `Export Segment Summary JSON`
 - chart PNG export
 
 Replay filtering is derived in the UI layer rather than rewriting stored data:
@@ -348,8 +365,14 @@ The Workflows tab supports:
 
 - selecting a built-in workflow
 - starting a workflow run against the active session stack
-- completing or skipping steps
+- completing, continuing, retaking, skipping, or canceling steps
+- per-step interaction modes:
+  - `manual_check`
+  - `stable_capture`
+  - `countdown_capture`
+  - `observe_and_confirm`
 - capture steps that validate the current live reading type / unit
+- staged capture confirmation for pause-after-capture steps
 - recent workflow run history stored in SQLite
 - selecting recent runs to review historical step results
 - in-app workflow reports for the selected run
@@ -376,7 +399,14 @@ Example shape:
     {
       "id": "measure_total_voltage",
       "instruction": "Measure total pack voltage.",
+      "interaction_mode": "stable_capture",
+      "advance_on_capture": false,
       "capture": true,
+      "capture_settings": {
+        "stable_for_s": 0.75,
+        "min_samples": 5,
+        "relative_tolerance": 0.01
+      },
       "expected_measurement_type": "voltage_dc",
       "expected_unit": "V"
     }
@@ -384,7 +414,7 @@ Example shape:
 }
 ```
 
-The goal is to add useful repeatable procedures without rewriting presenter or UI logic every time.
+Legacy workflow JSON that only uses `capture: true/false` still loads. New workflow definitions should prefer explicit `interaction_mode`, `advance_on_capture`, and `capture_settings`.
 
 ## Plugin Boundary
 

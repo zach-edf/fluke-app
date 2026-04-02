@@ -5,7 +5,7 @@ The desktop app's `Workflows` page is the guided procedure area of the GUI. It l
 - browse available workflow definitions
 - inspect the steps in a workflow before starting it
 - start a guided run tied to an active or auto-created session
-- complete, skip, or cancel workflow steps
+- complete, continue, retake, skip, or cancel workflow steps
 - review recent workflow runs
 - export a workflow report as Markdown
 - create new workflow definitions directly from the GUI
@@ -39,6 +39,9 @@ The right side shows the currently selected workflow or workflow run.
 - current step
 - current instruction
 - current requirement
+- current interaction mode
+- capture state
+- capture hint
 - active session
 - latest capture summary
 - run result
@@ -54,6 +57,8 @@ Below the summary area are:
 Action buttons:
 
 - `Complete Step`
+- `Continue`
+- `Retake`
 - `Skip Step`
 - `Cancel Workflow`
 - `Export Workflow Report`
@@ -87,10 +92,21 @@ When you start a workflow, the app:
 
 For each step:
 
-- `Complete Step` marks the current step complete
-- if the step is a capture step, the app records the latest live meter reading
+- `Complete Step` runs the primary action for the current step
+- capture steps validate the current live reading against the step's expected type and unit
+- stable-capture steps can stage a reading automatically once the live stream has remained stable long enough
+- countdown-capture steps can start a short timed capture window
+- `Continue` commits a staged capture when the step is configured to pause after capture
+- `Retake` clears the staged reading and lets the operator capture again
 - `Skip Step` records the step as skipped
 - the optional note field is attached to the step result when completing or skipping
+
+Supported interaction modes:
+
+- `manual_check`
+- `stable_capture`
+- `countdown_capture`
+- `observe_and_confirm`
 
 When the workflow finishes:
 
@@ -126,6 +142,15 @@ If a workflow is canceled:
 3. Click `Complete Step`.
 
 For capture steps, make sure the meter is connected and a current live reading is available before you complete the step.
+
+### Continue or retake a staged capture
+
+For pause-after-capture steps:
+
+1. Wait for the capture to stage.
+2. Review the `Capture State`, `Capture Hint`, and `Latest Capture` text.
+3. Click `Continue` to accept the staged reading.
+4. Click `Retake` to discard it and capture again.
 
 ### Skip a Step
 
@@ -181,15 +206,22 @@ Each step supports:
 
 - `Title`: user-facing step name
 - `Instruction`: what the operator should do
-- `This step captures a meter reading`: checkbox that makes the step a capture step
+- `Interaction Mode`: how the operator completes the step
 - `Measurement Type`: expected reading type for capture steps
 - `Expected Unit`: optional expected unit for capture steps
+- `Auto-advance after capture`: commit the step immediately after capture instead of pausing for continue/retake
+- `Stable For (s)`: required stable duration for `stable_capture`
+- `Min Samples`: minimum sample count before a stable capture can succeed
+- `Rel Tolerance`: relative stability tolerance for `stable_capture`
+- `Countdown (s)`: countdown duration for `countdown_capture`
 - `Note Prompt`: optional prompt text to guide note entry
 
 Important behavior:
 
-- `Measurement Type` and `Expected Unit` are intentionally disabled until `This step captures a meter reading` is checked
-- this is by design, because non-capture steps are manual checklist steps and do not require a live reading
+- `Measurement Type` and `Expected Unit` are enabled only for `stable_capture` and `countdown_capture`
+- `Stable For (s)`, `Min Samples`, and `Rel Tolerance` apply to `stable_capture`
+- `Countdown (s)` applies to `countdown_capture`
+- manual and observe/confirm steps do not require a live reading
 
 ### Save Behavior
 
@@ -209,8 +241,9 @@ For a solid operator experience:
 
 - use a short, specific title
 - keep each instruction action-oriented
-- use capture steps only when a meter reading is actually required
-- use manual steps for safety checks, setup, and interpretation
+- use `stable_capture` for probe-held measurements that need both hands free
+- use `countdown_capture` when the operator needs a short delay after initiating the step
+- use `manual_check` or `observe_and_confirm` for setup, safety checks, and interpretation
 - use note prompts for steps where a technician may need to record context
 - keep the category broad and the title specific
 
@@ -224,7 +257,7 @@ Examples:
 
 ## Workflow JSON Format
 
-The GUI builder writes the same workflow schema used by existing built-in workflow files.
+The GUI builder writes the current workflow schema. Legacy `capture: true/false` workflow files still load, but new definitions should use explicit interaction fields.
 
 Example:
 
@@ -244,14 +277,22 @@ Example:
       "id": "verify_pack_isolated",
       "title": "Verify Pack Is Isolated",
       "instruction": "Confirm the pack is safe to measure and isolated as needed.",
-      "capture": false,
+      "interaction_mode": "manual_check",
+      "advance_on_capture": false,
       "note_prompt": "Record any safety notes."
     },
     {
       "id": "measure_pack_voltage",
       "title": "Measure Pack Voltage",
       "instruction": "Measure the battery pack voltage in DC voltage mode.",
+      "interaction_mode": "stable_capture",
+      "advance_on_capture": false,
       "capture": true,
+      "capture_settings": {
+        "stable_for_s": 0.75,
+        "min_samples": 5,
+        "relative_tolerance": 0.01
+      },
       "expected_measurement_type": "voltage_dc",
       "expected_unit": "V"
     }
@@ -269,7 +310,10 @@ Rules to follow:
 - `workflow_id` must be unique
 - every step needs a unique `id`
 - every step should have a `title` and `instruction`
-- set `capture` to `true` only when the step should record a live reading
+- prefer explicit `interaction_mode`
+- set `capture` to `true` for `stable_capture` and `countdown_capture` steps
+- use `advance_on_capture` when the step should commit immediately after a successful capture
+- use `capture_settings` for stable or countdown tuning
 - `expected_measurement_type` should match a valid measurement enum value such as `voltage_dc`, `current_ac`, or `resistance`
 
 After adding a file manually:
@@ -308,10 +352,13 @@ Common causes:
 - the meter is not connected
 - no current live reading is available
 - the workflow expects a capture step but the operator has not produced a reading yet
+- the current live reading does not match the expected measurement type or unit
+- a stable-capture step has not yet satisfied its stability window
+- a staged capture is waiting on `Continue`
 
 ### The Measurement Type and Unit Fields Are Disabled
 
-This is expected until `This step captures a meter reading` is checked for that step.
+This is expected for `manual_check` and `observe_and_confirm` steps. Those modes do not capture a live reading, so measurement validation fields stay disabled.
 
 ## Relevant Code
 
