@@ -597,8 +597,9 @@ def create_main_window(runtime) -> QWidget:
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("Fluke Community Desktop")
-            self.setMinimumSize(900, 620)
-            self.resize(1100, 760)
+            min_width, min_height, width, height = _initial_main_window_geometry()
+            self.setMinimumSize(min_width, min_height)
+            self.resize(width, height)
 
             root = QWidget()
             outer = QVBoxLayout(root)
@@ -712,6 +713,20 @@ def create_main_window(runtime) -> QWidget:
             self._sb_reading.setText(f"Last reading: {live.last_updated_text}")
 
     return MainWindow()
+
+
+def _initial_main_window_geometry() -> tuple[int, int, int, int]:
+    app = QApplication.instance()
+    screen = None if app is None else app.primaryScreen()
+    if screen is None:
+        return (1100, 760, 1400, 920)
+
+    available = screen.availableGeometry()
+    width = max(900, min(1400, available.width() - 80))
+    height = max(620, min(920, available.height() - 80))
+    min_width = max(900, min(1100, width))
+    min_height = max(620, min(760, height))
+    return (min_width, min_height, width, height)
 
 
 # ---------------------------------------------------------------------------

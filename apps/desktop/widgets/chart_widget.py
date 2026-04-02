@@ -95,20 +95,19 @@ class ReadingChartWidget:
         from PySide6.QtCore import QDateTime
 
         use_time_axis = x_axis_mode == "datetime"
+        target_axis = self._axis_x_time if use_time_axis else self._axis_x_value
+        inactive_axis = self._axis_x_value if use_time_axis else self._axis_x_time
         self._axis_x_value.setVisible(not use_time_axis)
         self._axis_x_time.setVisible(use_time_axis)
         self._axis_x_value.setTitleText(x_axis_title)
         self._axis_x_time.setTitleText(x_axis_title)
         for series in (self._line_series, self._comparison_series, self._marker_series):
-            try:
-                series.detachAxis(self._axis_x_value)
-            except Exception:
-                pass
-            try:
-                series.detachAxis(self._axis_x_time)
-            except Exception:
-                pass
-            series.attachAxis(self._axis_x_time if use_time_axis else self._axis_x_value)
+            attached_axes = tuple(series.attachedAxes())
+            if inactive_axis in attached_axes:
+                series.detachAxis(inactive_axis)
+                attached_axes = tuple(series.attachedAxes())
+            if target_axis not in attached_axes:
+                series.attachAxis(target_axis)
         if use_time_axis:
             if min_x == max_x:
                 max_x = min_x + 1000.0
