@@ -25,5 +25,8 @@ exports/
 fluke_community.egg-info/
 .cursor/
 .claude/
+!example-hometab.png
+!example-livereading-logging.png
+!example-workflow-batterypackcheck.png
 
 
