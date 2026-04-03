@@ -20,6 +20,20 @@ The project is released under the [MIT License](LICENSE).
 
 For a structured documentation set instead of this high-level overview, start with [docs/README.md](docs/README.md).
 
+## Screenshots
+
+### Home
+
+![Home tab](docs/fluke-app-screenshots/example-hometab.png)
+
+### Live Reading
+
+![Live reading tab while logging](docs/fluke-app-screenshots/example-livereading-logging.png)
+
+### Workflows
+
+![Workflow battery pack check](docs/fluke-app-screenshots/example-workflow-batterypackcheck.png)
+
 ## Project Status
 
 What exists now:
