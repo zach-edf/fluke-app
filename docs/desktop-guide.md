@@ -173,14 +173,17 @@ Available chart modes:
 - `Rolling 30s`
 - `Rolling 60s`
 - `Rolling 5m`
-- `Since mode start`
-- `Since session start`
+- `Since Mode Start`
+- `Since Session Start`
 
 Important behavior:
 
+- use the `Chart Mode` selector to change the visible rolling window without changing the stored session data
+- `Rolling 30s`, `Rolling 60s`, and `Rolling 5m` are fixed rolling time ranges for the current measurement context
 - meter context changes still create a new derived boundary so the chart does not mix incompatible readings
 - changing chart mode shows a transient banner
-- `Since mode start` begins at the moment the current chart mode was selected
+- `Since Mode Start` begins at the moment the current chart mode was selected
+- `Since Session Start` uses the current logging session start time when a session is active
 - the app keeps enough buffered history to derive the other chart modes without rewriting stored session data
 
 ### Stale reading behavior
@@ -291,7 +294,26 @@ You can:
 - export a workflow report
 - create a new workflow definition from the GUI
 
-The workflow tab now surfaces the current step mode, capture state, and capture hint text. For capture steps that pause after staging a reading, the UI exposes dedicated `Continue` and `Retake` actions.
+The workflow tab surfaces the current step mode, capture state, capture hint text, and the latest staged or accepted capture.
+
+Primary action behavior depends on the current step:
+
+- `Complete Step` for manual checklist steps
+- `Confirm Step` for observe-and-confirm steps
+- `Capture Now` for immediate reading capture steps
+- `Start Countdown` for countdown steps that should wait before accepting a reading
+
+Capture-oriented steps can also expose:
+
+- `Continue` to accept a staged reading when the step pauses after capture
+- `Retake` to discard the staged reading and reacquire it
+
+The workflow builder lets you choose how each step records progress:
+
+- `Manual Check`: no live reading required; use this for setup, safety, or checklist items
+- `Observe And Confirm`: no live reading required; use this when the operator must visually verify a condition
+- `Stable Capture`: waits for a valid live reading to remain stable according to the configured capture settings
+- `Countdown Capture`: waits for the operator to start a countdown, then captures the live reading after that timer expires
 
 Because workflows are a larger feature area, see [Workflows Page Guide](workflows-page.md) for the detailed behavior and authoring instructions.
 

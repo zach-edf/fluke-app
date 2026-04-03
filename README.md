@@ -2,7 +2,9 @@
 
 Open desktop app, CLI, and Python SDK for working with BLE-enabled Fluke meters from a shared architecture.
 
-The project started from a single reverse-engineered prototype in `fluke_ble.py`. The repo now contains a more structured codebase built around:
+This is an unofficial community project. It is not affiliated with, endorsed by, or sponsored by Fluke Corporation. `Fluke` is a trademark of its respective owner.
+
+The repo contains a more structured codebase built around:
 
 - canonical domain models
 - profile-based protocol decoding
@@ -13,6 +15,8 @@ The project started from a single reverse-engineered prototype in `fluke_ble.py`
 - an extension boundary for future contributed profiles and workflow packs
 
 The current in-tree device focus is still the Fluke 376 FC.
+
+The project is released under the [MIT License](LICENSE).
 
 For a structured documentation set instead of this high-level overview, start with [docs/README.md](docs/README.md).
 
@@ -513,11 +517,81 @@ The test strategy is intentionally layered:
 - plugin loader tests
 - fixture capture and debug bundle tests
 
-## Legacy Prototype
+## Troubleshooting
 
-`fluke_ble.py` is still in the repo because it contains the original reverse-engineered implementation and remains useful reference material. It is not the long-term architectural center of the project anymore.
+### No devices found during scan
 
-Prefer the shared stack unless you are specifically mining the legacy script for protocol details.
+Check the basics first:
+
+- the meter is powered on and advertising over BLE
+- Bluetooth is enabled on the host
+- the device is in range
+- another app is not already holding the BLE connection
+- you are using the expected profile for the device you are testing
+
+Useful first commands:
+
+```bash
+fluke scan --timeout 10
+fluke --json devices supported
+```
+
+### Connect works poorly or drops during streaming
+
+Common causes:
+
+- the meter is too far away from the computer
+- another app or vendor utility is still connected to the meter
+- the host Bluetooth adapter is unstable or power-managed aggressively
+- the measurement mode changed and you are expecting the previous live context
+- the environment has not had repeated long-duration validation yet
+
+If the desktop app disconnects unexpectedly, it will attempt automatic reconnect. If reconnect fails, logging stops and any active workflow is canceled.
+
+### Desktop app opens but charts do not render
+
+Check:
+
+- `PySide6` is installed
+- the desktop dependency set was installed from `requirements-full.txt`
+- you launched the app from the same virtual environment where those packages were installed
+
+Recommended install path:
+
+```bash
+python -m pip install -r requirements-full.txt
+python -m pip install -e .
+```
+
+### Session export or workflow report export is missing
+
+Check:
+
+- the current export directory shown in the desktop `Settings` tab
+- the explicit output path you passed on the CLI
+- that the target directory exists or can be created
+
+### Platform notes
+
+#### Windows
+
+- BLE behavior depends heavily on the Windows Bluetooth stack and adapter drivers
+- if scan/connect behavior is inconsistent, update the adapter driver and retry after fully disconnecting other Bluetooth apps
+- pairing is not the same as maintaining an active BLE telemetry connection; avoid assuming the OS pairing state means the stream path is free
+
+#### macOS
+
+- allow Bluetooth access for the terminal, IDE, or app host you are launching from
+- if the desktop app starts but cannot discover devices, check Privacy & Security permissions and retry
+- the desktop app uses `PySide6.QtAsyncio` on macOS, so make sure the full desktop dependency set is installed in the active environment
+
+#### Linux
+
+- Linux support is still marked `Unknown` in the support matrix because adapter/runtime validation is limited
+- make sure the host Bluetooth stack is running and the adapter is not blocked by `rfkill`
+- desktop behavior may also depend on local `dbus` and Bluetooth service configuration
+
+For more first-run guidance, see [docs/getting-started.md](docs/getting-started.md) and [docs/support-matrix.md](docs/support-matrix.md).
 
 ## Documentation Index
 

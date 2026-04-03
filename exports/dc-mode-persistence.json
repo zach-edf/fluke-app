@@ -1,7 +1,7 @@
 {
   "session": {
     "session_id": "20260328T232810Z-3fd601e8",
-    "device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+    "device_id": "00000000-0000-0000-0000-000000000001",
     "started_at": "2026-03-28T23:28:10.482760+00:00",
     "ended_at": "2026-03-28T23:28:13.660090+00:00",
     "title": "DC mode persistence check",
@@ -19,8 +19,8 @@
     "duration_s": 3.013814
   },
   "device": {
-    "device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
-    "ble_address": "8477521A-DD95-59DD-04AD-76BC196226F6",
+    "device_id": "00000000-0000-0000-0000-000000000001",
+    "ble_address": "00000000-0000-0000-0000-000000000001",
     "model_name": "Fluke 376 FC",
     "profile_id": "fluke_376fc",
     "nickname": null,
@@ -40,7 +40,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -60,7 +60,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -80,7 +80,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -100,7 +100,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -120,7 +120,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -140,7 +140,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -160,7 +160,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -180,7 +180,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -200,7 +200,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -220,7 +220,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -240,7 +240,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -260,7 +260,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {
@@ -280,7 +280,7 @@
       "measurement_type": "voltage_dc",
       "status": "ok",
       "display_text": "9.2 V",
-      "source_device_id": "8477521A-DD95-59DD-04AD-76BC196226F6",
+      "source_device_id": "00000000-0000-0000-0000-000000000001",
       "mode": "dc",
       "raw_payload_hex": "00202020392e3220560020206463202020",
       "metadata": {

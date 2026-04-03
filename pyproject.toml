@@ -5,9 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fluke-community"
 version = "0.1.0"
-description = "Shared core, BLE transport, and CLI foundation for Fluke BLE meters."
+description = "Unofficial community desktop app, CLI, and SDK for BLE-enabled Fluke meters."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+keywords = ["fluke", "ble", "multimeter", "telemetry", "desktop"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
 dependencies = [
   "bleak>=0.22.3",
 ]

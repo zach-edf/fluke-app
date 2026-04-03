@@ -92,14 +92,14 @@ When you start a workflow, the app:
 
 For each step:
 
-- `Complete Step` runs the primary action for the current step
+- the primary button label changes to match the current step behavior
 - capture steps validate the current live reading against the step's expected type and unit
 - stable-capture steps can stage a reading automatically once the live stream has remained stable long enough
-- countdown-capture steps can start a short timed capture window
+- countdown-capture steps switch the primary action to `Start Countdown`, then stage a reading automatically when the countdown finishes
 - `Continue` commits a staged capture when the step is configured to pause after capture
 - `Retake` clears the staged reading and lets the operator capture again
 - `Skip Step` records the step as skipped
-- the optional note field is attached to the step result when completing or skipping
+- the optional note field is attached to the step result when completing, continuing, or skipping
 
 Supported interaction modes:
 
@@ -107,6 +107,13 @@ Supported interaction modes:
 - `stable_capture`
 - `countdown_capture`
 - `observe_and_confirm`
+
+Primary action labels by mode:
+
+- `manual_check`: `Complete Step`
+- `observe_and_confirm`: `Confirm Step`
+- `stable_capture`: `Capture Now`
+- `countdown_capture`: `Start Countdown`
 
 When the workflow finishes:
 
@@ -139,9 +146,16 @@ If a workflow is canceled:
 
 1. Perform the action described in the current instruction.
 2. If needed, enter a note in `Optional step note`.
-3. Click `Complete Step`.
+3. Click the primary action button for the current step.
 
 For capture steps, make sure the meter is connected and a current live reading is available before you complete the step.
+
+Typical capture flow by mode:
+
+- `stable_capture`: touch the probes, wait for the reading to settle, then review the staged capture if the step is configured to pause
+- `countdown_capture`: click `Start Countdown`, hold the measurement setup steady during the countdown, then review the staged capture if the step pauses
+- `manual_check`: click `Complete Step` after finishing the checklist item
+- `observe_and_confirm`: click `Confirm Step` after visually verifying the requested condition
 
 ### Continue or retake a staged capture
 
@@ -206,7 +220,7 @@ Each step supports:
 
 - `Title`: user-facing step name
 - `Instruction`: what the operator should do
-- `Interaction Mode`: how the operator completes the step
+- `Interaction Mode`: how the operator completes the step and whether a live reading is required
 - `Measurement Type`: expected reading type for capture steps
 - `Expected Unit`: optional expected unit for capture steps
 - `Auto-advance after capture`: commit the step immediately after capture instead of pausing for continue/retake
@@ -218,10 +232,14 @@ Each step supports:
 
 Important behavior:
 
+- `Manual Check` and `Observe And Confirm` are non-capture steps; they complete from operator confirmation only
+- `Stable Capture` uses the current live reading stream and the configured stability settings to determine when a reading is ready
+- `Countdown Capture` waits for the operator to start a countdown, then captures the live reading after the configured delay
 - `Measurement Type` and `Expected Unit` are enabled only for `stable_capture` and `countdown_capture`
 - `Stable For (s)`, `Min Samples`, and `Rel Tolerance` apply to `stable_capture`
 - `Countdown (s)` applies to `countdown_capture`
 - manual and observe/confirm steps do not require a live reading
+- if `Auto-advance after capture` is enabled, the step completes immediately after a successful capture and `Continue` / `Retake` are skipped
 
 ### Save Behavior
 
@@ -302,7 +320,7 @@ Example:
 
 ## Creating New Workflows Manually
 
-You can also create workflows without the GUI by adding a JSON file directly to [workflows](C:/Users/zachv/python/fluke-app/workflows).
+You can also create workflows without the GUI by adding a JSON file directly to [`workflows/`](../workflows).
 
 Rules to follow:
 
@@ -323,7 +341,7 @@ After adding a file manually:
 
 ## Plugin-Contributed Workflows
 
-The desktop app can also load workflows from plugin directories in addition to the built-in [workflows](C:/Users/zachv/python/fluke-app/workflows) folder.
+The desktop app can also load workflows from plugin directories in addition to the built-in [`workflows/`](../workflows) folder.
 
 That means the visible workflow list may contain:
 
@@ -341,7 +359,7 @@ Check the following:
 
 - the workflow save succeeded without an error dialog
 - the workflow ID is unique
-- the JSON file exists in [workflows](C:/Users/zachv/python/fluke-app/workflows)
+- the JSON file exists in [`workflows/`](../workflows)
 - the JSON is valid
 - the app was able to reload the workflow catalog
 
@@ -364,11 +382,11 @@ This is expected for `manual_check` and `observe_and_confirm` steps. Those modes
 
 Primary desktop workflow GUI code:
 
-- [views.py](C:/Users/zachv/python/fluke-app/apps/desktop/views.py)
-- [presenters.py](C:/Users/zachv/python/fluke-app/apps/desktop/presenters.py)
+- [apps/desktop/views.py](../apps/desktop/views.py)
+- [apps/desktop/presenters.py](../apps/desktop/presenters.py)
 
 Shared workflow runtime and catalog code:
 
-- [workflow_catalog.py](C:/Users/zachv/python/fluke-app/packages/fluke_app/workflow_catalog.py)
-- [workflow_runner.py](C:/Users/zachv/python/fluke-app/packages/fluke_app/workflow_runner.py)
-- [workflow.py](C:/Users/zachv/python/fluke-app/packages/fluke_core/models/workflow.py)
+- [packages/fluke_app/workflow_catalog.py](../packages/fluke_app/workflow_catalog.py)
+- [packages/fluke_app/workflow_runner.py](../packages/fluke_app/workflow_runner.py)
+- [packages/fluke_core/models/workflow.py](../packages/fluke_core/models/workflow.py)

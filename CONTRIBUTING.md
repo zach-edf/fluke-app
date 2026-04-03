@@ -2,12 +2,13 @@
 
 This project is intentionally structured so protocol work, app workflows, desktop UI, CLI, and SDK all share the same core services. Contributions are most useful when they keep that shared architecture intact.
 
+This is an unofficial community project and is not affiliated with or endorsed by Fluke Corporation.
+
 ## Principles
 
 - Fix the shared layer first, then surface it in CLI/Desktop/SDK.
 - Keep device-specific logic in profiles, not in presenters or CLI commands.
 - Prefer hardware-free tests with fake adapters and recorded fixtures.
-- Treat the legacy `fluke_ble.py` prototype as reference material, not the target architecture.
 
 Start with the contributor docs hub at [docs/developer/README.md](docs/developer/README.md) for the fuller development workflow and testing guides.
 
