@@ -7,7 +7,7 @@ from uuid import uuid4
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from apps.desktop.views import _require_qt
+from apps.desktop._qt import QApplication
 from apps.desktop.widgets import build_reading_chart
 
 
@@ -17,8 +17,7 @@ class DesktopChartWidgetTests(unittest.TestCase):
         tmp = tmp_root / uuid4().hex
         tmp.mkdir(parents=True, exist_ok=False)
 
-        qt = _require_qt()
-        app = qt["QApplication"].instance() or qt["QApplication"]([])
+        app = QApplication.instance() or QApplication([])
         chart = build_reading_chart(title="Live Reading", empty_text="No data yet.")
 
         try:

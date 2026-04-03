@@ -356,6 +356,10 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
                 lambda: adapter.is_connected("meter-reconnect")
                 and any(key[0] == "meter-reconnect" for key in adapter.subscription_keys)
             )
+            await _wait_until(
+                lambda: presenter.live_view_model().connection_health == "streaming"
+                and "Connected" in presenter.live_view_model().connection_text
+            )
 
             second = ReplayScenario(
                 (
@@ -374,6 +378,7 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(session.reading_count_text, "2 readings")
             self.assertEqual(live.marker_count_text, "2 markers")
         finally:
+            await presenter.shutdown()
             store.close()
 
     async def test_presenter_reports_reconnect_failure_and_stops_logging(self) -> None:
