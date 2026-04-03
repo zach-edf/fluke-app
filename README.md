@@ -108,6 +108,10 @@ Minimal dependency set:
 Full contributor / desktop dependency set:
 
 - `requirements-full.txt`: desktop, plotting, dashboard/data extras, plus the base BLE runtime
+- package extras are also available through `pyproject.toml`:
+  - `.[desktop]`: desktop UI and charting
+  - `.[full]`: desktop plus the current optional extras used in the repo
+  - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
 ## Installation
 
@@ -119,8 +123,7 @@ macOS / Linux:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements-full.txt
-python -m pip install -e .
+python -m pip install -e ".[full]"
 ```
 
 Windows PowerShell:
@@ -129,16 +132,19 @@ Windows PowerShell:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -r requirements-full.txt
-python -m pip install -e .
+python -m pip install -e ".[full]"
 ```
 
 ### Minimal install (CLI + SDK only)
 
 ```bash
-python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
+
+If you prefer requirements files over package extras, the legacy commands still work:
+
+- minimal: `python -m pip install -r requirements.txt && python -m pip install -e .`
+- full: `python -m pip install -r requirements-full.txt && python -m pip install -e .`
 
 The editable install provides these entry points from `pyproject.toml`:
 
@@ -150,6 +156,12 @@ If you skip `python -m pip install -e .`, use the module entry points directly:
 
 - `python -m apps.cli.main`
 - `python -m apps.desktop.main`
+
+Install expectations:
+
+- minimal install supports the CLI and SDK paths
+- desktop usage requires the desktop/full extras or `requirements-full.txt`
+- the full automated test suite also expects the desktop/full dependency set
 
 ## Running The App
 
@@ -504,8 +516,16 @@ python -m unittest tests.unit.test_cli_main tests.unit.test_desktop_presenter te
 Full suite:
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m unittest discover -s tests -p "test_*.py"
 python -m compileall apps packages tests
+```
+
+Minimal CLI/SDK-only verification:
+
+```bash
+python -m pip install -e .
+python -m unittest tests.unit.test_cli_main tests.unit.test_sdk_client tests.unit.test_fluke_376fc_profile tests.unit.test_fake_adapter_and_stream tests.unit.test_logging_flow tests.unit.test_workflow_catalog tests.unit.test_workflow_runner tests.unit.test_capture_export tests.unit.test_debug_bundle tests.unit.test_fixture_capture_tool tests.unit.test_plugin_loader tests.unit.test_statistics tests.unit.test_store_paths
 ```
 
 The test strategy is intentionally layered:
@@ -516,6 +536,7 @@ The test strategy is intentionally layered:
 - workflow runner tests
 - plugin loader tests
 - fixture capture and debug bundle tests
+- the full suite requires the desktop/full dependency set because desktop tests import `PySide6`
 
 ## Troubleshooting
 

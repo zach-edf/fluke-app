@@ -38,6 +38,12 @@ Current coverage areas include:
 
 ## Core Test Commands
 
+Install expectations:
+
+- minimal CLI/SDK verification works with `python -m pip install -e .`
+- the full suite requires the desktop/full dependency set because desktop tests import `PySide6`
+- the supported contributor/CI install is `python -m pip install -e ".[dev]"`
+
 ### Full unit suite
 
 ```powershell
@@ -48,6 +54,12 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ```powershell
 python -m compileall apps packages tests
+```
+
+### Minimal CLI/SDK suite
+
+```powershell
+python -m unittest tests.unit.test_cli_main tests.unit.test_sdk_client tests.unit.test_fluke_376fc_profile tests.unit.test_fake_adapter_and_stream tests.unit.test_logging_flow tests.unit.test_workflow_catalog tests.unit.test_workflow_runner tests.unit.test_capture_export tests.unit.test_debug_bundle tests.unit.test_fixture_capture_tool tests.unit.test_plugin_loader tests.unit.test_statistics tests.unit.test_store_paths
 ```
 
 The compile check is useful for catching:

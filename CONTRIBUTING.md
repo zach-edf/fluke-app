@@ -19,7 +19,8 @@ Windows PowerShell:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-full.txt
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
 Run the test suite:
@@ -28,6 +29,20 @@ Run the test suite:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 .\.venv\Scripts\python.exe -m compileall apps packages tests
 ```
+
+If you only need the CLI or SDK path, a minimal install is enough:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Contributor note:
+
+- the full automated suite imports `PySide6`, so `.[dev]` or `requirements-full.txt` is the supported test environment
+- the repository also keeps the `requirements*.txt` files for users who prefer explicit dependency sets over package extras
 
 ## Where To Put Changes
 
