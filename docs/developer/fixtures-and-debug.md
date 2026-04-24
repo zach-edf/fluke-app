@@ -57,7 +57,27 @@ The bundle includes:
 - loaded plugin metadata
 - optional database snapshot summary if the SQLite file exists
 
+## BLE Probe
+
+Use the CLI:
+
+```powershell
+.\.venv\Scripts\python.exe -m apps.cli.main debug probe `
+  --device "<DEVICE_ID>" `
+  --read `
+  --notify-seconds 5 `
+  --output artifacts\probe.json
+```
+
+The probe report includes:
+
+- service UUIDs and descriptions
+- characteristic UUIDs and properties
+- optional read payloads as hex
+- optional notification samples captured during the probe window
+
 ## When To Use Which
 
 - capture raw fixture data when the problem is parser or profile related
+- probe BLE services when you need to discover unsupported GATT endpoints or on-device transfer hooks
 - export a debug bundle when the problem spans discovery, sessions, workflows, or contributor triage

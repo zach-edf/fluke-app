@@ -19,13 +19,15 @@ class DeviceRepository:
             self._con.execute(
                 """
                 INSERT INTO devices (
-                    id, ble_address, model_name, profile_id, nickname,
+                    id, ble_address, model_name, profile_id, family_id, variant_id, nickname,
                     firmware_version, serial_number, support_level, last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     ble_address=excluded.ble_address,
                     model_name=excluded.model_name,
                     profile_id=excluded.profile_id,
+                    family_id=excluded.family_id,
+                    variant_id=excluded.variant_id,
                     nickname=excluded.nickname,
                     firmware_version=excluded.firmware_version,
                     serial_number=excluded.serial_number,
@@ -37,6 +39,8 @@ class DeviceRepository:
                     device.ble_address,
                     device.model_name,
                     device.profile_id,
+                    device.family_id,
+                    device.variant_id,
                     device.nickname,
                     device.firmware_version,
                     device.serial_number,
@@ -73,6 +77,8 @@ def _device_from_row(row: sqlite3.Row) -> DeviceInfo:
         ble_address=row["ble_address"],
         model_name=row["model_name"],
         profile_id=row["profile_id"],
+        family_id=row["family_id"] if "family_id" in row.keys() else "",
+        variant_id=row["variant_id"] if "variant_id" in row.keys() else "",
         nickname=row["nickname"],
         firmware_version=row["firmware_version"],
         serial_number=row["serial_number"],

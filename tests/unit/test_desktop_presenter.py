@@ -10,16 +10,29 @@ from uuid import uuid4
 from tests.unit._helpers import measurement_payload
 
 from apps.desktop.presenters import AppPresenter
-from fluke_app import DeviceManager
+from fluke_app import ConnectionRetryPolicy, DeviceManager
 from fluke_app.workflow_catalog import WorkflowCatalog
 from fluke_ble.adapter import BleDevice
 from fluke_core.enums import MeasurementType, ReadingStatus, WorkflowInteractionMode
 from fluke_core.models.reading import Reading
 from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefinition, WorkflowStep
 from fluke_protocol import ProfileRegistry
-from fluke_protocol.profiles.fluke_376fc import FLUKE_MEAS_UUID, FLUKE_STATUS_UUID, Fluke376FCProfile
+from fluke_protocol.profiles.fluke_376fc import (
+    FLUKE_LOGGING_BUFFER_UUID,
+    FLUKE_LOGGING_CAPACITY_UUID,
+    FLUKE_LOGGING_CONFIG_UUID,
+    FLUKE_LOGGING_CONTROL_POINT_UUID,
+    FLUKE_LOGGING_SERVICE_UUID,
+    FLUKE_LOGGING_STATUS_UUID,
+    FLUKE_MEAS_UUID,
+    FLUKE_STATUS_UUID,
+    Fluke376FCLoggingStatus,
+    Fluke376FCProfile,
+    FlukeAdvancedClampFamilyProfile,
+    FlukeClampMeterFamilyProfile,
+)
 from fluke_store import FlukeStore
-from fluke_testing import FakeBleAdapter, ReplayFrame, ReplayScenario
+from fluke_testing import FakeBleAdapter, FakeBleService, ReplayFrame, ReplayScenario
 
 
 class HangingSubscribeAdapter(FakeBleAdapter):
@@ -33,7 +46,14 @@ class FailingReconnectAdapter(FakeBleAdapter):
         super().__init__(*args, **kwargs)
         self.fail_connect_for: set[str] = set()
 
-    async def connect(self, device_id: str) -> None:  # type: ignore[override]
+    async def connect(
+        self,
+        device_id: str,
+        *,
+        ble_address: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:  # type: ignore[override]
+        del ble_address, timeout_s
         if device_id in self.fail_connect_for:
             raise RuntimeError(f"Simulated reconnect failure for {device_id}")
         await super().connect(device_id)
@@ -45,10 +65,99 @@ class DelayedReconnectAdapter(FakeBleAdapter):
         self.delayed_connect_for: set[str] = set()
         self._reconnect_delay_s = reconnect_delay_s
 
-    async def connect(self, device_id: str) -> None:  # type: ignore[override]
+    async def connect(
+        self,
+        device_id: str,
+        *,
+        ble_address: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:  # type: ignore[override]
+        del ble_address, timeout_s
         if device_id in self.delayed_connect_for:
             await asyncio.sleep(self._reconnect_delay_s)
         await super().connect(device_id)
+
+
+class LoggingDownloadDesktopAdapter(FakeBleAdapter):
+    def __init__(self) -> None:
+        super().__init__(
+            devices=[
+                BleDevice(
+                    id="meter-memory",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:99",
+                    rssi=-46,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ],
+            services_by_device={
+                "meter-memory": [
+                    FakeBleService(
+                        uuid=FLUKE_LOGGING_SERVICE_UUID,
+                        description="Device Logging",
+                    )
+                ]
+            },
+        )
+        self.status = Fluke376FCLoggingStatus(state_code=0, bytes_logged=36, blocks_logged=2)
+        self.capacity = (1024).to_bytes(4, byteorder="little", signed=False)
+        self.config_payload = bytes.fromhex("a5 00 00 00 20 1c 00 00")
+        self.buffer_chunks = [
+            bytes.fromhex("01 04 00 00 a5 00 6b 1c d7 69 99 1c d7 69 12 00 00 00"),
+            bytes.fromhex("20 01 01 01 00 00 04 00 fe ff 06 00 00 00 00 00 00 00"),
+        ]
+
+    async def read(self, device_id: str, characteristic_uuid: str) -> bytes:  # type: ignore[override]
+        await super().read(device_id, characteristic_uuid)
+        if characteristic_uuid == FLUKE_LOGGING_STATUS_UUID:
+            return self.status.to_payload()
+        if characteristic_uuid == FLUKE_LOGGING_CAPACITY_UUID:
+            return self.capacity
+        if characteristic_uuid == FLUKE_LOGGING_CONFIG_UUID:
+            return self.config_payload
+        if characteristic_uuid == FLUKE_LOGGING_CONTROL_POINT_UUID:
+            return b"\x00"
+        return b""
+
+    async def write(
+        self,
+        device_id: str,
+        characteristic_uuid: str,
+        data: bytes,
+        response: bool | None = None,
+    ) -> None:  # type: ignore[override]
+        await super().write(device_id, characteristic_uuid, data, response=response)
+        if characteristic_uuid == FLUKE_LOGGING_CONFIG_UUID:
+            self.config_payload = bytes(data)
+            return
+        if characteristic_uuid != FLUKE_LOGGING_CONTROL_POINT_UUID:
+            return
+        if data == b"\x83":
+            self.status = Fluke376FCLoggingStatus(state_code=4, bytes_logged=36, blocks_logged=2)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_STATUS_UUID, self.status.to_payload())
+            return
+        if data == b"\x86":
+            self.status = Fluke376FCLoggingStatus(state_code=0, bytes_logged=36, blocks_logged=2)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_STATUS_UUID, self.status.to_payload())
+            return
+        if data == b"\x82":
+            self.status = Fluke376FCLoggingStatus(state_code=3, bytes_logged=36, blocks_logged=2)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_STATUS_UUID, self.status.to_payload())
+            self.status = Fluke376FCLoggingStatus(state_code=0, bytes_logged=0, blocks_logged=0)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_STATUS_UUID, self.status.to_payload())
+            self.buffer_chunks = []
+            return
+        if len(data) == 9 and data[0] == 0x84:
+            start_block = int.from_bytes(data[1:5], byteorder="little", signed=False)
+            block_count = int.from_bytes(data[5:9], byteorder="little", signed=False)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_CONTROL_POINT_UUID, b"\x02")
+            for chunk in self.buffer_chunks[start_block - 1 : start_block - 1 + block_count]:
+                await self._emit_if_subscribed(device_id, FLUKE_LOGGING_BUFFER_UUID, chunk)
+            await self._emit_if_subscribed(device_id, FLUKE_LOGGING_CONTROL_POINT_UUID, b"\x03")
+
+    async def _emit_if_subscribed(self, device_id: str, characteristic_uuid: str, payload: bytes) -> None:
+        if (device_id, characteristic_uuid.lower()) in self.subscription_keys:
+            await self.emit(device_id, characteristic_uuid, payload)
 
 
 async def _wait_until(predicate, timeout: float = 0.5, interval: float = 0.01) -> None:
@@ -58,6 +167,40 @@ async def _wait_until(predicate, timeout: float = 0.5, interval: float = 0.01) -
             return
         await asyncio.sleep(interval)
     raise AssertionError("Condition was not met before timeout.")
+
+
+def _pack_lsb_fields(widths: tuple[int, ...], values: tuple[int, ...]) -> bytes:
+    current = 0
+    offset = 0
+    for width, value in zip(widths, values, strict=True):
+        current |= (value & ((1 << width) - 1)) << offset
+        offset += width
+    return current.to_bytes((offset + 7) // 8, byteorder="little", signed=False)
+
+
+def _advanced_clamp_reading_payload(
+    *,
+    counts: int,
+    state: int,
+    decimal_places: int,
+    magnitude: int,
+    sign: int,
+    unit_code: int,
+    function_code: int,
+) -> bytes:
+    return _pack_lsb_fields(
+        (21, 4, 3, 3, 1, 8, 8, 7, 3, 5, 1),
+        (counts, state, decimal_places, magnitude, sign, unit_code, function_code, 0, 0, 0, 0),
+    )
+
+
+def _advanced_clamp_frame(
+    primary: bytes,
+    secondary: bytes,
+    *,
+    mode_attrs: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0),
+) -> bytes:
+    return primary + secondary + _pack_lsb_fields((4, 4, 4, 3, 1), mode_attrs)
 
 
 class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
@@ -294,19 +437,27 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
-        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        manager = DeviceManager(
+            adapter,
+            ProfileRegistry([Fluke376FCProfile()]),
+            retry_policy=ConnectionRetryPolicy(
+                initial_connect_attempts=1,
+                stream_start_attempts=1,
+                stream_start_timeout_s=0.01,
+            ),
+        )
         presenter = AppPresenter(manager, store, device_operation_timeout_s=0.01)
 
         try:
             await presenter.scan_devices(timeout_s=0.1)
-            with self.assertRaisesRegex(RuntimeError, "live stream startup timed out"):
+            with self.assertRaisesRegex(RuntimeError, "Failed to start BLE notifications"):
                 await presenter.connect_device("meter-timeout")
 
             self.assertFalse(adapter.is_connected("meter-timeout"))
             self.assertEqual(presenter.live_view_model().connection_text, "Disconnected")
             self.assertEqual(presenter.live_view_model().status_text, "Disconnected")
-            self.assertIn("timed out", presenter.discovery_view_model().status_text)
-            self.assertIn("timed out", presenter.settings_view_model().diagnostics_text)
+            self.assertIn("Connection failed", presenter.discovery_view_model().status_text)
+            self.assertIn("Failed to start BLE notifications", presenter.settings_view_model().diagnostics_text)
         finally:
             store.close()
 
@@ -327,7 +478,15 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
-        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        manager = DeviceManager(
+            adapter,
+            ProfileRegistry([Fluke376FCProfile()]),
+            retry_policy=ConnectionRetryPolicy(
+                recovery_direct_attempts=2,
+                recovery_backoff_s=(0.0, 0.0),
+                recovery_window_s=1.0,
+            ),
+        )
         presenter = AppPresenter(
             manager,
             store,
@@ -398,7 +557,15 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
-        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        manager = DeviceManager(
+            adapter,
+            ProfileRegistry([Fluke376FCProfile()]),
+            retry_policy=ConnectionRetryPolicy(
+                recovery_direct_attempts=2,
+                recovery_backoff_s=(0.0, 0.0),
+                recovery_window_s=0.2,
+            ),
+        )
         presenter = AppPresenter(
             manager,
             store,
@@ -802,6 +969,224 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(session_vm.compare_chart_points[0][1], 0.15, places=3)
             self.assertAlmostEqual(session_vm.compare_chart_points[1][1], 0.25, places=3)
             self.assertIn("Compared with Comparison Session", session_vm.compare_summary_text)
+        finally:
+            store.close()
+
+    async def test_presenter_can_import_device_memory_into_session_store(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-device-memory.db")
+        adapter = LoggingDownloadDesktopAdapter()
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-memory")
+
+            report = await presenter.import_device_memory()
+
+            self.assertEqual(report["import_report"]["imported_count"], 1)
+            self.assertEqual(report["download_report"]["downloaded_bytes"], 36)
+            session_vm = presenter.session_view_model()
+            self.assertEqual(len(session_vm.recent_sessions), 1)
+            imported_session_id = session_vm.recent_sessions[0].session_id
+            self.assertEqual(session_vm.selected_session_id, imported_session_id)
+            self.assertEqual(session_vm.selected_unit_text, "A")
+            self.assertIn("Imported 1 device-memory session(s)", session_vm.export_status_text)
+
+            readings = store.readings.list_for_session(imported_session_id)
+            self.assertEqual(len(readings), 1)
+            self.assertEqual(readings[0].measurement_type, MeasurementType.CURRENT_DC)
+            self.assertEqual(readings[0].status, ReadingStatus.OK)
+            self.assertEqual(readings[0].metadata["source"], "device_memory")
+        finally:
+            store.close()
+
+    async def test_presenter_can_browse_import_and_clear_device_memory(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-device-memory-browser.db")
+        adapter = LoggingDownloadDesktopAdapter()
+        manager = DeviceManager(adapter, ProfileRegistry([FlukeClampMeterFamilyProfile(), Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-memory")
+
+            status_report = await presenter.refresh_device_memory_status()
+            self.assertEqual(status_report["bytes_logged"], 36)
+            self.assertEqual(status_report["blocks_logged"], 2)
+
+            browse_report = await presenter.browse_device_memory(value_source="maximum")
+            self.assertEqual(browse_report["download_report"]["downloaded_bytes"], 36)
+
+            session_vm = presenter.session_view_model()
+            self.assertEqual(session_vm.device_memory_value_source, "maximum")
+            self.assertEqual(len(session_vm.device_memory_sessions), 1)
+            self.assertIn("36 byte(s), 2 block(s)", session_vm.device_memory_status_text)
+            self.assertIn("1024 byte(s)", session_vm.device_memory_capacity_text)
+            preview_id = session_vm.device_memory_sessions[0].preview_id
+
+            import_report = await presenter.import_selected_device_memory((preview_id,), value_source="maximum")
+            self.assertEqual(import_report["import_report"]["imported_count"], 1)
+            session_vm_after_import = presenter.session_view_model()
+            self.assertEqual(session_vm_after_import.device_memory_sessions[0].import_status_text, "Imported")
+
+            clear_report = await presenter.clear_device_memory()
+            self.assertEqual(clear_report["status_after"]["bytes_logged"], 0)
+            self.assertEqual(clear_report["status_after"]["blocks_logged"], 0)
+            session_vm_after_clear = presenter.session_view_model()
+            self.assertEqual(len(session_vm_after_clear.device_memory_sessions), 0)
+            self.assertIn("0 byte(s), 0 block(s)", session_vm_after_clear.device_memory_status_text)
+        finally:
+            store.close()
+
+    async def test_presenter_can_read_and_apply_device_logging_settings(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-device-settings.db")
+        adapter = LoggingDownloadDesktopAdapter()
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-memory")
+
+            read_report = await presenter.read_device_logging_config()
+            self.assertEqual(read_report["interval_seconds"], 165)
+            self.assertEqual(read_report["duration_seconds"], 7200)
+
+            live = presenter.live_view_model()
+            self.assertEqual(live.logging_interval_seconds_text, "165")
+            self.assertEqual(live.logging_duration_seconds_text, "7200")
+            self.assertFalse(live.logging_manual_stop)
+
+            write_report = await presenter.apply_device_logging_config(
+                interval_seconds=915,
+                duration_seconds=0,
+            )
+            self.assertTrue(write_report["write_ok"])
+
+            live_after = presenter.live_view_model()
+            self.assertEqual(live_after.logging_interval_seconds_text, "915")
+            self.assertEqual(live_after.logging_duration_seconds_text, "")
+            self.assertTrue(live_after.logging_manual_stop)
+            self.assertIn("interval 915s, duration manual", live_after.logging_status_text)
+            self.assertEqual(adapter.config_payload.hex(" "), "93 03 00 00 00 00 00 00")
+        finally:
+            store.close()
+
+    async def test_presenter_surfaces_advanced_clamp_live_channels_and_mode_badges(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-advanced-clamp-live.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-advanced-clamp",
+                    name="Fluke 378 FC",
+                    address="AA:BB:CC:DD:EE:37",
+                    rssi=-45,
+                    metadata={"advertisement_name": "Fluke 378 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(
+            adapter,
+            ProfileRegistry([FlukeAdvancedClampFamilyProfile(), FlukeClampMeterFamilyProfile(), Fluke376FCProfile()]),
+        )
+        presenter = AppPresenter(manager, store)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-advanced-clamp")
+
+            payload = _advanced_clamp_frame(
+                _advanced_clamp_reading_payload(
+                    counts=123,
+                    state=0,
+                    decimal_places=1,
+                    magnitude=0,
+                    sign=0,
+                    unit_code=2,
+                    function_code=12,
+                ),
+                _advanced_clamp_reading_payload(
+                    counts=45,
+                    state=0,
+                    decimal_places=2,
+                    magnitude=0,
+                    sign=0,
+                    unit_code=4,
+                    function_code=21,
+                ),
+                mode_attrs=(8, 2, 7, 1, 1),
+            )
+            await adapter.emit("meter-advanced-clamp", FLUKE_MEAS_UUID, payload)
+
+            live = presenter.live_view_model()
+            self.assertIn("live_primary_secondary", live.available_capabilities)
+            self.assertIn("Primary/Secondary Live", live.capability_summary_text)
+            self.assertEqual(live.live_primary_reading, "12.3")
+            self.assertEqual(live.live_secondary_reading, "0.45")
+            self.assertIn("Clockwise", live.family_mode_badges)
+
+            presenter.select_live_channel("secondary")
+            live_secondary = presenter.live_view_model()
+            self.assertEqual(live_secondary.selected_live_channel, "secondary")
+            self.assertEqual(live_secondary.main_value, "0.45")
+        finally:
+            store.close()
+
+    async def test_presenter_can_export_raw_fixture_from_live_buffer(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-fixture-export.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-fixture",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:FA",
+                    rssi=-47,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([FlukeClampMeterFamilyProfile(), Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store, export_directory=tmp)
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-fixture")
+
+            await adapter.emit("meter-fixture", FLUKE_STATUS_UUID, bytes([0x17]))
+            await adapter.emit("meter-fixture", FLUKE_MEAS_UUID, measurement_payload("12.34 V", "dc"))
+
+            fixture_path = Path(presenter.export_raw_fixture_capture(tmp / "fixture.json", max_frames=10))
+            self.assertTrue(fixture_path.exists())
+
+            payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["device"]["device_id"], "meter-fixture")
+            self.assertEqual(payload["device"]["family_id"], "fluke_clamp_meter")
+            self.assertEqual(payload["frame_count"], 2)
+            self.assertEqual(payload["frames"][0]["characteristic_uuid"].lower(), FLUKE_STATUS_UUID.lower())
+            self.assertEqual(payload["frames"][1]["characteristic_uuid"].lower(), FLUKE_MEAS_UUID.lower())
+            self.assertEqual(payload["parsed_readings"][0]["measurement_type"], MeasurementType.VOLTAGE_DC.value)
+            self.assertIn("raw frame(s) buffered", presenter.settings_view_model().live_buffer_text)
         finally:
             store.close()
 

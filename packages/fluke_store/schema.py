@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS devices (
     ble_address TEXT NOT NULL,
     model_name TEXT NOT NULL,
     profile_id TEXT NOT NULL,
+    family_id TEXT NOT NULL DEFAULT '',
+    variant_id TEXT NOT NULL DEFAULT '',
     nickname TEXT NULL,
     firmware_version TEXT NULL,
     serial_number TEXT NULL,

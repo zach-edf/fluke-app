@@ -22,17 +22,25 @@ For a structured documentation set instead of this high-level overview, start wi
 
 ## Screenshots
 
-### Home
+### Device Discovery
 
-![Home tab](docs/fluke-app-screenshots/example-hometab.png)
+![Device Discovery tab](docs/fluke-app-screenshots/readme-device-discovery-connected.png)
 
 ### Live Reading
 
-![Live reading tab while logging](docs/fluke-app-screenshots/example-livereading-logging.png)
+![Live Reading tab with logging controls](docs/fluke-app-screenshots/readme-live-reading-logging-settings.png)
+
+### Advanced Clamp Live
+
+![Advanced clamp live panel](docs/fluke-app-screenshots/desktop-live-reading-advanced-clamp.png)
+
+### Session And Device Memory
+
+![Session tab with device memory browser](docs/fluke-app-screenshots/readme-session-device-memory.png)
 
 ### Workflows
 
-![Workflow battery pack check](docs/fluke-app-screenshots/example-workflow-batterypackcheck.png)
+![Workflow battery pack check](docs/fluke-app-screenshots/readme-workflows.png)
 
 ## Project Status
 
@@ -48,7 +56,7 @@ What exists now:
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow run history can be reviewed and exported as reports from the desktop UI
-- CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, and debug bundle export
+- CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
 - hardware-free test coverage using fake BLE adapters and replay frames
@@ -317,6 +325,7 @@ fluke --json workflow list
 ```bash
 fluke plugins list
 fluke fixtures capture --device "<DEVICE_ID>" --profile fluke_376fc --duration 10 --output fixtures/capture.json
+fluke debug probe --device "<DEVICE_ID>" --read --notify-seconds 5 --output artifacts/probe.json
 fluke debug bundle --output artifacts/debug-bundle.zip
 ```
 
@@ -481,6 +490,11 @@ Important note: the built-in `fluke_376fc` path still ships from the core codeba
 
 - CLI: `fluke debug bundle`
 - script: `scripts/export_debug_bundle.py`
+
+### BLE probe
+
+- CLI: `fluke debug probe`
+- captures connected GATT services, characteristic properties, optional reads, and optional notification samples
 
 These are meant to lower the barrier for remote debugging when hardware is unavailable.
 

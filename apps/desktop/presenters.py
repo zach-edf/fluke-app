@@ -10,6 +10,7 @@ from statistics import median
 import threading
 
 from apps.desktop.viewmodels import (
+    DeviceMemorySessionViewModel,
     DiscoveryViewModel,
     HomeViewModel,
     LiveReadingViewModel,
@@ -31,9 +32,16 @@ from fluke_app import (
     ExportService,
     SessionRecorder,
     WorkflowRunner,
+    build_logging_session_previews,
+    clear_logging_data,
     default_workflow_directory,
+    download_logging_data,
+    import_logging_sessions,
     load_workflow_catalog,
     new_session,
+    read_logging_config,
+    read_logging_status,
+    write_logging_config,
 )
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 from fluke_core.enums import (
@@ -73,6 +81,7 @@ class _ReplayDescriptor:
     context_id: str
     label: str
     normalization_key: str | None
+    channel_role: str = "primary"
     is_unknown: bool = False
 
 
@@ -169,10 +178,12 @@ class AppPresenter:
         self._workflow_owned_session_id: str | None = None
         self._workflow_capture = _WorkflowCaptureRuntime()
         self._current_device: DeviceInfo | None = None
+        self._device_memory_cache: dict[str, object] | None = None
         self._last_completed_session_id: str | None = None
         self._live_readings: deque[Reading] = deque(maxlen=5000)
+        self._raw_notifications: deque[dict[str, object]] = deque(maxlen=5000)
         self._live_markers: list[SessionMarker] = []
-        self._live_context_key: tuple[str, str, str] | None = None
+        self._live_context_key: tuple[str, ...] | None = None
         self._live_chart_mode = "rolling_30s"
         self._live_segment_started_at: datetime | None = None
         self._last_reading_time: datetime | None = None
@@ -186,6 +197,8 @@ class AppPresenter:
         self._alert_event_id = 0
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
+        self._device_manager.subscribe_notifications(self.on_notification)
+        self._device_manager.subscribe_connection_diagnostics(self._on_connection_diagnostics)
         self._device_manager.subscribe_disconnects(self._on_device_disconnected)
         self.refresh_recent_devices()
         self.refresh_recent_sessions()
@@ -246,53 +259,27 @@ class AppPresenter:
         try:
             self._set_connecting_state(target_device_id)
             try:
-                device = await asyncio.wait_for(
-                    self._device_manager.connect(target_device_id, profile_id=profile_id),
-                    timeout=self._device_operation_timeout_s,
+                device = await self._device_manager.establish_session(target_device_id, profile_id=profile_id)
+            except Exception as exc:
+                status = self._device_manager.latest_connection_diagnostics()
+                message = str(exc)
+                if status is not None:
+                    message = status.message
+                    if status.last_error_text and status.last_error_text not in message:
+                        message = f"{message} Last error: {status.last_error_text}"
+                self._set_disconnected_state(
+                    connection_text="Disconnected",
+                    live_status_text="Disconnected",
+                    discovery_status_text=f"Connection failed for {target_device_id}.",
+                    diagnostics_text=message,
+                    connection_health="error",
                 )
-            except asyncio.TimeoutError as exc:
-                self._set_discovery(status_text=f"Connection timed out for {target_device_id}")
-                self._set_connection_status("Connection timed out")
-                with self._lock:
-                    self._settings = replace(
-                        self._settings,
-                        diagnostics_text=(
-                            f"Timed out while connecting to {target_device_id}. "
-                            "If the meter shows connected, wait a moment and retry the BLE session."
-                        ),
-                    )
-                raise RuntimeError(f"Timed out while connecting to {target_device_id}.") from exc
+                raise RuntimeError(message) from exc
 
             label = device.nickname or device.model_name or device.device_id
-            try:
-                self._store.upsert_device(device)
-                self._set_connected_pending_stream_state(device)
-                self.refresh_recent_devices()
-                await asyncio.wait_for(
-                    self._device_manager.start_stream(),
-                    timeout=self._device_operation_timeout_s,
-                )
-            except asyncio.TimeoutError as exc:
-                await self._device_manager.disconnect()
-                self._set_disconnected_state(
-                    connection_text="Disconnected",
-                    live_status_text="Disconnected",
-                    discovery_status_text=f"Connected to {label}, but live stream startup timed out.",
-                    diagnostics_text=(
-                        f"Live stream startup timed out for {label}. "
-                        "The BLE link opened, but notifications did not start in time."
-                    ),
-                )
-                raise RuntimeError(f"Connected to {label}, but live stream startup timed out.") from exc
-            except Exception as exc:
-                await self._device_manager.disconnect()
-                self._set_disconnected_state(
-                    connection_text="Disconnected",
-                    live_status_text="Disconnected",
-                    discovery_status_text=f"Connection failed for {label}.",
-                    diagnostics_text=f"Connection failed for {label}: {exc}",
-                )
-                raise RuntimeError(f"Connection failed for {label}: {exc}") from exc
+            self._store.upsert_device(device)
+            self._set_connected_pending_stream_state(device)
+            self.refresh_recent_devices()
 
             with self._lock:
                 self._live = replace(self._live, status_text="Streaming")
@@ -343,22 +330,39 @@ class AppPresenter:
             self._set_home_busy(False)
 
     def _on_device_disconnected(self) -> None:
-        """Called when the BLE device disconnects unexpectedly (e.g. powered off)."""
+        status = self._device_manager.latest_connection_diagnostics()
+        reconnect_failed = bool(status is not None and status.is_recovery)
+        detail = "Device disconnected unexpectedly. Check that the meter is powered on and in range."
+        if status is not None:
+            detail = status.message or status.last_error_text or detail
+        self._finalize_unexpected_disconnect(diagnostics_text=detail, reconnect_failed=reconnect_failed)
+
+    def _on_connection_diagnostics(self, status) -> None:
         device = self._current_device
-        if device is None or self._auto_reconnect_attempts <= 0:
-            self._finalize_unexpected_disconnect(
-                diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
-            )
+        if status.is_recovery and status.phase in {"recovery_waiting", "direct_connect", "stream_start", "rescan"} and device is not None:
+            if status.phase == "recovery_waiting":
+                self._record_system_marker("Connection lost. Automatic reconnect started.", label="system")
+            if status.phase == "rescan":
+                self._set_reconnecting_state(device, status.attempt, max(1, status.total_attempts))
+                with self._lock:
+                    self._discovery = replace(self._discovery, status_text="Scanning for meter during reconnect...", is_reconnecting=True)
+                    self._settings = replace(self._settings, diagnostics_text=status.message)
+            else:
+                self._set_reconnecting_state(device, max(1, status.attempt), max(1, status.total_attempts))
+                with self._lock:
+                    self._settings = replace(self._settings, diagnostics_text=status.message)
             return
-
-        loop = self._event_loop
-        if loop is None:
-            self._finalize_unexpected_disconnect(
-                diagnostics_text="Device disconnected unexpectedly. Check that the meter is powered on and in range.",
-            )
-            return
-
-        loop.call_soon_threadsafe(self._schedule_auto_reconnect, device)
+        if status.is_recovery and status.phase == "recovered":
+            if self._current_device is None:
+                active = self._device_manager.active_device()
+                if active is not None:
+                    self._current_device = active
+            if self._current_device is not None:
+                self._set_reconnected_state(self._current_device)
+                self._record_system_marker("Connection restored after automatic reconnect.", label="system")
+                self._store.upsert_device(self._current_device)
+                self.refresh_recent_devices()
+                self.refresh_recent_sessions()
 
     def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
         if self._current_device is None:
@@ -465,6 +469,406 @@ class AppPresenter:
         with self._lock:
             self._session = replace(self._session, export_status_text=f"Segment summary JSON exported to {exported}")
         return exported
+
+    def set_device_memory_value_source(self, value_source: str) -> None:
+        with self._lock:
+            self._session = replace(self._session, device_memory_value_source=str(value_source or "average"))
+
+    async def refresh_device_memory_status(self) -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before reading device memory status.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before reading device memory status.")
+        if not self._device_has_capability("device_memory_download"):
+            raise RuntimeError("The connected device does not expose saved-memory status.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._session = replace(self._session, device_memory_status_text="Reading device memory status...")
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=f"Reading device memory status from {device.device_id}...",
+            )
+        try:
+            status_report = await read_logging_status(self._device_manager.ble_adapter(), device.device_id)
+            self._apply_device_memory_status_to_session(status_report)
+            with self._lock:
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Read device memory status from {device.device_id}: "
+                        f"{status_report['bytes_logged']} byte(s), {status_report['blocks_logged']} block(s), "
+                        f"state={status_report['state_label']}."
+                    ),
+                )
+            return status_report
+        finally:
+            self._set_home_busy(False)
+
+    async def browse_device_memory(self, value_source: str = "average") -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before browsing device memory.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before browsing device memory.")
+        if not self._device_has_capability("device_memory_download"):
+            raise RuntimeError("The connected device does not expose saved-memory download.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._session = replace(
+                self._session,
+                device_memory_value_source=value_source,
+                device_memory_status_text="Downloading device memory...",
+                export_status_text="Browsing device memory...",
+            )
+            self._settings = replace(
+                self._settings,
+                diagnostics_text=f"Downloading saved device-memory sessions from {device.device_id}...",
+            )
+        try:
+            download_report = await download_logging_data(self._device_manager.ble_adapter(), device.device_id)
+            if "decode_error" in download_report:
+                raise RuntimeError(f"Could not decode downloaded device-memory payload: {download_report['decode_error']}")
+            decoded_sessions = [
+                session for session in download_report.get("decoded_sessions", []) if isinstance(session, dict)
+            ]
+            previews_raw = build_logging_session_previews(
+                session_repo=self._store.sessions,
+                device_id=device.device_id,
+                decoded_sessions=decoded_sessions,
+            )
+            preview_lookup = {
+                str(preview["preview_id"]): session
+                for preview, session in zip(previews_raw, decoded_sessions, strict=True)
+            }
+            self._device_memory_cache = {
+                "device_id": device.device_id,
+                "value_source": value_source,
+                "download_report": download_report,
+                "previews": previews_raw,
+                "preview_lookup": preview_lookup,
+            }
+            status_report = _logging_status_summary_from_download_report(download_report)
+            self._apply_device_memory_status_to_session(
+                status_report,
+                preview_summary=f"{len(previews_raw)} session(s) available for import.",
+                previews=tuple(_device_memory_session_vm(preview) for preview in previews_raw),
+                value_source=value_source,
+            )
+            with self._lock:
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Browsed device memory for {device.device_id}: "
+                        f"{len(previews_raw)} decoded session(s), {download_report.get('downloaded_bytes', 0)} byte(s) downloaded."
+                    ),
+                )
+            self._report_message(f"Loaded {len(previews_raw)} device-memory session(s).")
+            return {
+                "download_report": download_report,
+                "previews": previews_raw,
+            }
+        finally:
+            self._set_home_busy(False)
+
+    async def import_device_memory(self, value_source: str = "average") -> dict[str, object]:
+        browse_report = await self.browse_device_memory(value_source=value_source)
+        import_report = await self.import_all_device_memory(value_source=value_source)
+        return {
+            "download_report": browse_report["download_report"],
+            "import_report": import_report["import_report"],
+            **({"clear_report": import_report["clear_report"]} if "clear_report" in import_report else {}),
+        }
+
+    async def import_selected_device_memory(
+        self,
+        preview_ids: tuple[str, ...] | list[str],
+        *,
+        value_source: str | None = None,
+    ) -> dict[str, object]:
+        return await self._import_cached_device_memory(
+            preview_ids=tuple(str(item) for item in preview_ids if item),
+            value_source=value_source,
+            clear_after_import=False,
+        )
+
+    async def import_all_device_memory(
+        self,
+        *,
+        value_source: str | None = None,
+        clear_after_import: bool = False,
+    ) -> dict[str, object]:
+        return await self._import_cached_device_memory(
+            preview_ids=None,
+            value_source=value_source,
+            clear_after_import=clear_after_import,
+        )
+
+    async def clear_device_memory(self) -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before clearing device memory.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before clearing device memory.")
+        if not self._device_has_capability("device_memory_clear"):
+            raise RuntimeError("The connected device does not expose device-memory erase.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._session = replace(self._session, device_memory_status_text="Clearing device memory...")
+        try:
+            report = await clear_logging_data(self._device_manager.ble_adapter(), device.device_id)
+            self._device_memory_cache = None
+            self._apply_device_memory_status_to_session(
+                report["status_after"],
+                preview_summary="Device memory cleared.",
+                previews=(),
+            )
+            with self._lock:
+                self._session = replace(
+                    self._session,
+                    export_status_text="Cleared device memory.",
+                )
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Cleared device memory on {device.device_id}: "
+                        f"{report['status_after']['bytes_logged']} byte(s), "
+                        f"{report['status_after']['blocks_logged']} block(s) remain."
+                    ),
+                )
+            self._report_message("Cleared device memory.")
+            return report
+        finally:
+            self._set_home_busy(False)
+
+    def export_raw_fixture_capture(self, path: str | Path | None = None, *, max_frames: int = 200) -> str:
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before exporting a raw fixture capture.")
+        frames = list(self._raw_notifications)[-max(1, int(max_frames)) :]
+        if not frames:
+            raise RuntimeError("No raw notification frames have been buffered yet.")
+        export_path = self._resolve_export_path(
+            path or (self._export_directory / "fixtures" / f"{device.device_id}-fixture.json"),
+            f"{device.device_id}-fixture.json",
+        )
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "device": {
+                "device_id": device.device_id,
+                "model_name": device.model_name,
+                "profile_id": device.profile_id,
+                "family_id": device.family_id,
+                "variant_id": device.variant_id,
+                "support_level": device.support_level,
+                "capabilities": list(device.capabilities),
+            },
+            "services": _json_safe(self._device_manager.active_runtime_services()),
+            "frame_count": len(frames),
+            "frames": frames,
+            "parsed_readings": [reading.as_dict() for reading in list(self._live_readings)[-max(1, int(max_frames)) :]],
+        }
+        export_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+        with self._lock:
+            self._settings = replace(
+                self._settings,
+                fixture_status_text=f"Saved raw fixture capture to {export_path}",
+            )
+        return str(export_path)
+
+    async def read_device_logging_config(self) -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before reading logging settings.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before reading logging settings.")
+        if not self._device_has_capability("device_logging_config"):
+            raise RuntimeError("The connected device does not expose logging settings.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._live = replace(self._live, logging_status_text="Reading logging settings...")
+        try:
+            report = await read_logging_config(self._device_manager.ble_adapter(), device.device_id)
+            self._apply_logging_config_to_live(report)
+            with self._lock:
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Read logging settings from {device.device_id}: "
+                        f"interval={report['interval_seconds']}s, duration={report['duration_seconds']}s."
+                    ),
+                )
+            self._report_message("Read device logging settings.")
+            return report
+        finally:
+            self._set_home_busy(False)
+
+    async def apply_device_logging_config(self, *, interval_seconds: int, duration_seconds: int) -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before applying logging settings.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before applying logging settings.")
+        if not self._device_has_capability("device_logging_config"):
+            raise RuntimeError("The connected device does not expose logging settings.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._live = replace(self._live, logging_status_text="Applying logging settings...")
+        try:
+            report = await write_logging_config(
+                self._device_manager.ble_adapter(),
+                device.device_id,
+                interval_seconds=interval_seconds,
+                duration_seconds=duration_seconds,
+                read_before=True,
+                read_after=True,
+            )
+            if not report.get("write_ok"):
+                raise RuntimeError(str(report.get("write_error") or "Failed to write logging settings."))
+            applied = report.get("read_after") or {
+                "interval_seconds": interval_seconds,
+                "duration_seconds": duration_seconds,
+            }
+            self._apply_logging_config_to_live(applied)
+            with self._lock:
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Applied logging settings to {device.device_id}: "
+                        f"interval={applied['interval_seconds']}s, duration={applied['duration_seconds']}s."
+                    ),
+                )
+            self._report_message("Updated device logging settings.")
+            return report
+        finally:
+            self._set_home_busy(False)
+
+    async def _import_cached_device_memory(
+        self,
+        *,
+        preview_ids: tuple[str, ...] | None,
+        value_source: str | None,
+        clear_after_import: bool,
+    ) -> dict[str, object]:
+        self._remember_running_loop()
+        if self._recorder.active_session() is not None:
+            raise RuntimeError("Stop the active logging session before importing device memory.")
+        device = self._device_manager.active_device()
+        if device is None:
+            raise RuntimeError("Connect to a device before importing device memory.")
+        if not self._device_has_capability("device_memory_download"):
+            raise RuntimeError("The connected device does not expose saved-memory download.")
+
+        selected_value_source = str(value_source or self._session.device_memory_value_source or "average")
+        cache = self._device_memory_cache
+        if (
+            cache is None
+            or cache.get("device_id") != device.device_id
+            or cache.get("value_source") != selected_value_source
+        ):
+            if preview_ids is not None:
+                raise RuntimeError("Browse device memory before importing selected sessions.")
+            await self.browse_device_memory(selected_value_source)
+            cache = self._device_memory_cache
+
+        if cache is None:
+            raise RuntimeError("Device-memory cache is not available.")
+
+        preview_lookup = cache.get("preview_lookup")
+        if not isinstance(preview_lookup, dict):
+            raise RuntimeError("Device-memory cache is incomplete.")
+
+        selected_sessions: list[dict[str, object]] = []
+        if preview_ids is None:
+            selected_sessions = [session for session in preview_lookup.values() if isinstance(session, dict)]
+        else:
+            for preview_id in preview_ids:
+                session = preview_lookup.get(preview_id)
+                if isinstance(session, dict):
+                    selected_sessions.append(session)
+        if not selected_sessions:
+            raise RuntimeError("No device-memory sessions selected for import.")
+
+        self._set_home_busy(True)
+        with self._lock:
+            self._session = replace(self._session, export_status_text="Importing device-memory sessions...")
+        try:
+            import_report = import_logging_sessions(
+                device_repo=self._store.devices,
+                session_repo=self._store.sessions,
+                reading_repo=self._store.readings,
+                device_id=device.device_id,
+                decoded_sessions=selected_sessions,
+                profile_id=device.profile_id or "fluke_376fc",
+                value_source=selected_value_source,
+            )
+            self.refresh_recent_sessions()
+            imported_sessions = import_report["imported_sessions"]
+            if imported_sessions:
+                newest = max(imported_sessions, key=lambda item: str(item["started_at"]))
+                self.select_session(str(newest["session_id"]))
+
+            clear_report: dict[str, object] | None = None
+            if clear_after_import:
+                clear_report = await clear_logging_data(self._device_manager.ble_adapter(), device.device_id)
+                self._device_memory_cache = None
+                self._apply_device_memory_status_to_session(
+                    clear_report["status_after"],
+                    preview_summary="Device memory cleared after import.",
+                    previews=(),
+                    value_source=selected_value_source,
+                )
+            else:
+                refreshed_previews = build_logging_session_previews(
+                    session_repo=self._store.sessions,
+                    device_id=device.device_id,
+                    decoded_sessions=[session for session in preview_lookup.values() if isinstance(session, dict)],
+                )
+                self._device_memory_cache = {
+                    **cache,
+                    "previews": refreshed_previews,
+                }
+                status_report = _logging_status_summary_from_download_report(cache.get("download_report", {}))
+                self._apply_device_memory_status_to_session(
+                    status_report,
+                    preview_summary=f"{len(refreshed_previews)} session(s) loaded from device memory.",
+                    previews=tuple(_device_memory_session_vm(preview) for preview in refreshed_previews),
+                    value_source=selected_value_source,
+                )
+
+            summary = (
+                f"Imported {import_report['imported_count']} device-memory session(s)"
+                f" and skipped {import_report['skipped_count']} duplicate(s)."
+            )
+            if clear_after_import:
+                summary = f"{summary[:-1]} before clearing the meter."
+            with self._lock:
+                self._session = replace(self._session, export_status_text=summary)
+                self._settings = replace(
+                    self._settings,
+                    diagnostics_text=(
+                        f"Device-memory import complete for {device.device_id}: "
+                        f"{import_report['imported_count']} imported, "
+                        f"{import_report['skipped_count']} skipped."
+                    ),
+                )
+            self._report_message(summary)
+            response: dict[str, object] = {"import_report": import_report}
+            if clear_report is not None:
+                response["clear_report"] = clear_report
+            return response
+        finally:
+            self._set_home_busy(False)
 
     def export_workflow_report(self, path: str | Path, run_id: str | None = None) -> str:
         target = self._resolve_export_workflow_run_id(run_id)
@@ -895,6 +1299,7 @@ class AppPresenter:
         )
         same_session = current_session.selected_session_id == session_id
         selected_context_id = current_session.selected_context_id if same_session else None
+        selected_replay_channel = current_session.selected_replay_channel if same_session else "primary"
         selected_axis_mode = current_session.selected_axis_mode if same_session else "elapsed"
         selected_segment_id = current_session.selected_segment_id if same_session else None
         selected_compare_session_id = current_session.compare_session_id if same_session else None
@@ -904,6 +1309,20 @@ class AppPresenter:
             selected_context_id = None
         if selected_compare_session_id not in {item.session_id for item in compare_options}:
             selected_compare_session_id = None
+        available_replay_channels = tuple(
+            channel
+            for channel in ("primary", "secondary")
+            if any(_replay_descriptor(reading).channel_role == channel for reading in readings)
+        )
+        if selected_replay_channel not in {"primary", "secondary"}:
+            selected_replay_channel = "primary"
+        if selected_replay_channel not in available_replay_channels and available_replay_channels:
+            selected_replay_channel = available_replay_channels[0]
+        if selected_context_id is None and available_replay_channels and len(available_replay_channels) > 1:
+            selected_context_id = next(
+                (group.context_id for group in replay_groups if group.context_id.startswith(f"{selected_replay_channel}\x1f")),
+                selected_context_id,
+            )
         if selected_context_id is None and replay_groups and (not same_session or not current_session.available_contexts):
             if len(replay_groups) > 1:
                 selected_context_id = replay_groups[0].context_id
@@ -1029,6 +1448,10 @@ class AppPresenter:
                 selected_session_id=session_id,
                 selected_context_id=selected_context_id,
                 selected_context_label=context_label,
+                selected_replay_channel=(
+                    selected_replay_channel if selected_group is None else selected_group.readings[0].metadata.get("channel_role", selected_replay_channel)
+                ),
+                available_replay_channels=available_replay_channels,
                 selected_axis_mode=selected_axis_mode,
                 selected_segment_id=selected_segment_id,
                 compare_session_id=selected_compare_session_id,
@@ -1054,8 +1477,18 @@ class AppPresenter:
         session_id = self.session_view_model().selected_session_id
         if session_id is None:
             return
+        selected_channel = self.session_view_model().selected_replay_channel
+        if context_id is not None and context_id.startswith("secondary\x1f"):
+            selected_channel = "secondary"
+        elif context_id is not None and context_id.startswith("primary\x1f"):
+            selected_channel = "primary"
         with self._lock:
-            self._session = replace(self._session, selected_context_id=context_id, selected_segment_id=None)
+            self._session = replace(
+                self._session,
+                selected_context_id=context_id,
+                selected_replay_channel=selected_channel,
+                selected_segment_id=None,
+            )
         self.select_session(session_id)
 
     def select_compare_session(self, session_id: str | None) -> None:
@@ -1078,6 +1511,19 @@ class AppPresenter:
             self._live = replace(self._live, selected_chart_mode=chart_mode)
             self._refresh_live_chart_locked()
 
+    def select_live_channel(self, channel_role: str) -> None:
+        if channel_role not in {"primary", "secondary"}:
+            return
+        with self._lock:
+            self._live = replace(self._live, selected_live_channel=channel_role)
+            latest = self._latest_live_reading_for_channel_locked(channel_role)
+            if latest is not None:
+                self._apply_live_selected_channel_locked(latest)
+                self._live_context_key = _reading_context_key(latest)
+            else:
+                self._live_context_key = None
+            self._refresh_live_chart_locked()
+
     def select_session_axis_mode(self, axis_mode: str) -> None:
         session_id = self.session_view_model().selected_session_id
         if session_id is None:
@@ -1094,39 +1540,83 @@ class AppPresenter:
             self._session = replace(self._session, selected_segment_id=segment_id)
         self.select_session(session_id)
 
+    def select_session_replay_channel(self, channel_role: str) -> None:
+        session_id = self.session_view_model().selected_session_id
+        if session_id is None or channel_role not in {"primary", "secondary"}:
+            return
+        current = self.session_view_model()
+        matching = [ctx for ctx in current.available_contexts if ctx.context_id.startswith(f"{channel_role}\x1f")]
+        selected_context_id = None if not matching else matching[0].context_id
+        with self._lock:
+            self._session = replace(
+                self._session,
+                selected_replay_channel=channel_role,
+                selected_context_id=selected_context_id,
+                selected_segment_id=None,
+            )
+        self.select_session(session_id)
+
     def on_reading(self, reading: Reading) -> None:
         value = "--" if reading.value is None else f"{reading.value:.6g}"
         timestamp = reading.timestamp_utc.astimezone(timezone.utc).strftime("%H:%M:%S UTC")
         context_key = _reading_context_key(reading)
+        channel_role = _reading_channel_role(reading)
         banner_text = ""
         self._last_reading_time = datetime.now(timezone.utc)
         alert_marker_message: str | None = None
         auto_commit_capture = False
         refresh_workflow_vm = False
         with self._lock:
-            if self._live_context_key is not None and context_key != self._live_context_key:
-                self._live_segment_started_at = reading.timestamp_utc
-                banner_text = f"Live chart reset: meter mode changed to {_reading_context_label(reading)}."
-            elif self._live_context_key is None:
-                self._live_segment_started_at = reading.timestamp_utc
-            self._live_context_key = context_key
             self._live_readings.append(reading)
+            selected_live_channel = self._live.selected_live_channel or "primary"
+            is_selected_channel = channel_role == selected_live_channel or "live_primary_secondary" not in set(
+                self._live.available_capabilities
+            )
+            if is_selected_channel:
+                if self._live_context_key is not None and context_key != self._live_context_key:
+                    self._live_segment_started_at = reading.timestamp_utc
+                    banner_text = f"Live chart reset: meter mode changed to {_reading_context_label(reading)}."
+                elif self._live_context_key is None:
+                    self._live_segment_started_at = reading.timestamp_utc
+                self._live_context_key = context_key
+            elif self._live_context_key is None:
+                latest_selected = self._latest_live_reading_for_channel_locked(selected_live_channel)
+                if latest_selected is not None:
+                    self._live_context_key = _reading_context_key(latest_selected)
             active_session = self._recorder.active_session()
             is_logging = active_session is not None
             session_title = None if active_session is None else (active_session.title or active_session.session_id)
+            live_kwargs: dict[str, object] = {
+                "connection_health": "streaming",
+                "session_title": session_title,
+                "chart_notice_text": banner_text or self._live.chart_notice_text,
+                "is_logging": is_logging,
+                "last_updated_text": timestamp,
+                "marker_count_text": f"{self._recorder.marker_count()} markers",
+                "family_mode_badges": tuple(str(item) for item in reading.metadata.get("family_mode_badges", ()) if item),
+            }
+            if channel_role == "primary":
+                live_kwargs.update(
+                    {
+                        "live_primary_reading": value,
+                        "live_primary_unit_text": reading.unit,
+                        "live_primary_label": _reading_context_label(reading),
+                    }
+                )
+            elif channel_role == "secondary":
+                live_kwargs.update(
+                    {
+                        "live_secondary_reading": value,
+                        "live_secondary_unit_text": reading.unit,
+                        "live_secondary_label": _reading_context_label(reading),
+                    }
+                )
             self._live = replace(
                 self._live,
-                main_value=value,
-                unit_text=reading.unit,
-                measurement_label=reading.measurement_type.value.replace("_", " ").title(),
-                status_text=reading.status.value.replace("_", " ").title(),
-                connection_health="streaming",
-                session_title=session_title,
-                chart_notice_text=banner_text or self._live.chart_notice_text,
-                is_logging=is_logging,
-                last_updated_text=timestamp,
-                marker_count_text=f"{self._recorder.marker_count()} markers",
+                **live_kwargs,
             )
+            if is_selected_channel:
+                self._apply_live_selected_channel_locked(reading)
             self._refresh_live_chart_locked()
             active_workflow = self._workflow_runner.active_state()
             if active_workflow is not None and active_workflow.current_step is not None:
@@ -1179,6 +1669,28 @@ class AppPresenter:
                 self.report_error(str(exc))
         elif refresh_workflow_vm:
             self.refresh_workflows()
+
+    def on_notification(self, characteristic_uuid: str, payload: bytes) -> None:
+        observed_at = datetime.now(timezone.utc)
+        with self._lock:
+            self._raw_notifications.append(
+                {
+                    "characteristic_uuid": characteristic_uuid,
+                    "observed_at": observed_at.isoformat(),
+                    "payload_hex": bytes(payload).hex(),
+                }
+            )
+            self._settings = replace(
+                self._settings,
+                live_buffer_text=(
+                    f"{len(self._raw_notifications)} raw frame(s) buffered"
+                    + (
+                        f"; latest {characteristic_uuid.lower()} len={len(payload)}"
+                        if characteristic_uuid
+                        else ""
+                    )
+                ),
+            )
 
     def set_alert_thresholds(self, low: float | None, high: float | None) -> None:
         """Set (or clear) value-based alert thresholds."""
@@ -1476,15 +1988,46 @@ class AppPresenter:
                 connection_text=f"Connected to {label}",
                 status_text="Starting stream...",
                 is_connected=True,
+                available_capabilities=tuple(device.capabilities),
+                capability_summary_text=_capability_summary_text(device.capabilities),
                 connection_health="connected",
                 alert_active=False,
                 alert_message="",
+                live_primary_reading="--",
+                live_primary_unit_text="",
+                live_primary_label="Primary",
+                live_secondary_reading="--",
+                live_secondary_unit_text="",
+                live_secondary_label="Secondary",
+                family_mode_badges=(),
+                selected_live_channel="primary",
                 chart_points=(),
                 marker_points=(),
                 chart_notice_text="",
                 summary_text="Min - | Max - | Avg -",
                 marker_count_text="0 markers",
+                logging_status_text=(
+                    "Logging settings not read yet."
+                    if "device_logging_config" in set(device.capabilities)
+                    else "Logging settings unavailable."
+                ),
+                logging_interval_seconds_text="",
+                logging_duration_seconds_text="",
+                logging_manual_stop=False,
             )
+            self._session = replace(
+                self._session,
+                device_memory_status_text=(
+                    "Device memory status not read yet."
+                    if "device_memory_download" in set(device.capabilities)
+                    else "Device memory unavailable."
+                ),
+                device_memory_capacity_text="",
+                device_memory_summary_text="No device-memory preview loaded.",
+                device_memory_value_source="average",
+                device_memory_sessions=(),
+            )
+            self._device_memory_cache = None
             self._discovery = replace(
                 self._discovery,
                 selected_device_id=device.device_id,
@@ -1495,7 +2038,15 @@ class AppPresenter:
             self._settings = replace(
                 self._settings,
                 diagnostics_text=f"Connected to {label}. Starting BLE notifications...",
+                active_device_text=f"{label} ({device.device_id})",
+                active_family_text=_device_family_summary(device),
+                active_profile_text=f"Profile: {device.profile_id or '-'}",
+                active_capabilities_text=_capability_summary_text(device.capabilities),
+                active_services_text=_service_summary_text(self._device_manager.active_runtime_services()),
+                live_buffer_text="0 raw frame(s) buffered",
+                fixture_status_text="",
             )
+            self._raw_notifications.clear()
 
     def _set_disconnected_state(
         self,
@@ -1522,6 +2073,16 @@ class AppPresenter:
                 main_value="--",
                 unit_text="",
                 measurement_label="Idle",
+                available_capabilities=(),
+                capability_summary_text="",
+                live_primary_reading="--",
+                live_primary_unit_text="",
+                live_primary_label="Primary",
+                live_secondary_reading="--",
+                live_secondary_unit_text="",
+                live_secondary_label="Secondary",
+                family_mode_badges=(),
+                selected_live_channel="primary",
                 connection_text=connection_text,
                 status_text=live_status_text,
                 is_connected=False,
@@ -1536,7 +2097,20 @@ class AppPresenter:
                 chart_notice_text="",
                 summary_text="Min - | Max - | Avg -",
                 marker_count_text="0 markers",
+                logging_interval_seconds_text="",
+                logging_duration_seconds_text="",
+                logging_manual_stop=False,
+                logging_status_text="Logging settings unavailable.",
             )
+            self._session = replace(
+                self._session,
+                device_memory_status_text="Device memory unavailable.",
+                device_memory_capacity_text="",
+                device_memory_summary_text="",
+                device_memory_value_source="average",
+                device_memory_sessions=(),
+            )
+            self._device_memory_cache = None
             self._discovery = replace(
                 self._discovery,
                 status_text=discovery_status_text,
@@ -1544,6 +2118,17 @@ class AppPresenter:
                 is_reconnecting=False,
             )
             self._settings = replace(self._settings, diagnostics_text=diagnostics_text)
+            self._settings = replace(
+                self._settings,
+                active_device_text="No device connected",
+                active_family_text="",
+                active_profile_text="",
+                active_capabilities_text="",
+                active_services_text="",
+                live_buffer_text="",
+                fixture_status_text="",
+            )
+            self._raw_notifications.clear()
 
     def _set_discovery(
         self,
@@ -1591,6 +2176,62 @@ class AppPresenter:
                 ),
             )
 
+    def _device_has_capability(self, capability: str) -> bool:
+        device = self._current_device
+        if device is None:
+            return False
+        return capability in set(device.capabilities)
+
+    def _apply_logging_config_to_live(self, config: dict[str, object]) -> None:
+        interval_seconds = int(config.get("interval_seconds", 0) or 0)
+        duration_seconds = int(config.get("duration_seconds", 0) or 0)
+        manual_stop = duration_seconds == 0
+        with self._lock:
+            self._live = replace(
+                self._live,
+                logging_interval_seconds_text=str(interval_seconds),
+                logging_duration_seconds_text="" if manual_stop else str(duration_seconds),
+                logging_manual_stop=manual_stop,
+                logging_status_text=(
+                    f"Logging settings loaded: interval {interval_seconds}s, "
+                    f"duration {'manual' if manual_stop else f'{duration_seconds}s'}."
+                ),
+            )
+
+    def _apply_device_memory_status_to_session(
+        self,
+        report: dict[str, object],
+        *,
+        preview_summary: str | None = None,
+        previews: tuple[DeviceMemorySessionViewModel, ...] | None = None,
+        value_source: str | None = None,
+    ) -> None:
+        bytes_logged = int(report.get("bytes_logged") or 0)
+        blocks_logged = int(report.get("blocks_logged") or 0)
+        state_label = str(report.get("state_label") or "unknown").replace("_", " ")
+        capacity_bytes = report.get("capacity_bytes")
+        capacity_text = ""
+        if isinstance(capacity_bytes, int) and capacity_bytes > 0:
+            percent_full = report.get("percent_full")
+            percent_text = "" if not isinstance(percent_full, (int, float)) else f" ({percent_full:.2f}% full)"
+            capacity_text = f"Capacity {capacity_bytes} byte(s){percent_text}"
+        elif report.get("capacity_error"):
+            capacity_text = f"Capacity unavailable: {report['capacity_error']}"
+        status_text = f"Device memory: {state_label}, {bytes_logged} byte(s), {blocks_logged} block(s)."
+        with self._lock:
+            self._session = replace(
+                self._session,
+                device_memory_status_text=status_text,
+                device_memory_capacity_text=capacity_text,
+                device_memory_summary_text=(
+                    self._session.device_memory_summary_text if preview_summary is None else preview_summary
+                ),
+                device_memory_sessions=self._session.device_memory_sessions if previews is None else previews,
+                device_memory_value_source=(
+                    self._session.device_memory_value_source if value_source is None else str(value_source)
+                ),
+            )
+
     def _reset_live_chart_state(self, start_at: datetime | None = None) -> None:
         self._live_context_key = None
         self._live_segment_started_at = start_at
@@ -1601,6 +2242,22 @@ class AppPresenter:
 
     def _reset_workflow_capture_runtime(self) -> None:
         self._workflow_capture = _WorkflowCaptureRuntime()
+
+    def _latest_live_reading_for_channel_locked(self, channel_role: str) -> Reading | None:
+        for reading in reversed(self._live_readings):
+            if _reading_channel_role(reading) == channel_role:
+                return reading
+        return None
+
+    def _apply_live_selected_channel_locked(self, reading: Reading) -> None:
+        value = "--" if reading.value is None else f"{reading.value:.6g}"
+        self._live = replace(
+            self._live,
+            main_value=value,
+            unit_text=reading.unit,
+            measurement_label=_reading_context_label(reading),
+            status_text=reading.status.value.replace("_", " ").title(),
+        )
 
     def _refresh_live_chart_locked(self) -> None:
         active_session = self._recorder.active_session()
@@ -1719,6 +2376,21 @@ def _session_vm(session: Session) -> SessionSummaryViewModel:
     )
 
 
+def _device_memory_session_vm(preview: dict[str, object]) -> DeviceMemorySessionViewModel:
+    interval_seconds = int(preview.get("interval_seconds") or 0)
+    detail_count = int(preview.get("detail_count") or 0)
+    return DeviceMemorySessionViewModel(
+        preview_id=str(preview.get("preview_id") or ""),
+        title=str(preview.get("title") or ""),
+        started_at_text=str(preview.get("started_at_text") or "-"),
+        ended_at_text=str(preview.get("ended_at_text") or "-"),
+        measurement_text=str(preview.get("measurement_text") or "Unknown"),
+        interval_text=f"{interval_seconds}s",
+        detail_count_text=str(detail_count),
+        import_status_text=str(preview.get("import_status") or "Ready"),
+    )
+
+
 def _session_compare_vm(session: Session) -> SessionCompareViewModel:
     started = session.started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     label = session.title or session.session_id
@@ -1747,6 +2419,68 @@ def _recent_device_vm(device: DeviceInfo) -> RecentDeviceViewModel:
         support_text=device.support_level,
         last_seen_text=last_seen_text,
     )
+
+
+def _capability_summary_text(capabilities: list[str] | tuple[str, ...]) -> str:
+    if not capabilities:
+        return ""
+    labels = {
+        "live_scalar": "Scalar Live",
+        "live_primary_secondary": "Primary/Secondary Live",
+        "device_logging_config": "Device Logging Settings",
+        "device_memory_download": "Device Memory Download",
+        "device_memory_clear": "Device Memory Clear",
+        "session_import": "Session Import",
+        "fieldsense_view": "FieldSense",
+        "phase_rotation_view": "Phase Rotation",
+        "phase_to_phase_view": "Phase-to-Phase",
+        "relative_mode_view": "Relative Mode",
+        "continuity_state_view": "Continuity State",
+        "self_check_view": "Self Check",
+    }
+    return ", ".join(labels.get(capability, capability.replace("_", " ").title()) for capability in capabilities)
+
+
+def _device_family_summary(device: DeviceInfo) -> str:
+    family = device.family_id or "-"
+    variant = device.variant_id or "-"
+    return f"Family: {family} | Variant: {variant} | Support: {device.support_level or '-'}"
+
+
+def _service_summary_text(services) -> str:
+    payload = _json_safe(services)
+    if not isinstance(payload, dict):
+        return ""
+    parts: list[str] = []
+    for key, value in payload.items():
+        if not value:
+            continue
+        if isinstance(value, dict):
+            parts.append(f"{key}={','.join(sorted(str(item) for item in value.values() if item))}")
+        else:
+            parts.append(f"{key}={value}")
+    return " | ".join(parts)
+
+
+def _json_safe(value):
+    if hasattr(value, "__dataclass_fields__"):
+        return {key: _json_safe(getattr(value, key)) for key in value.__dataclass_fields__}
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _logging_status_summary_from_download_report(report: object) -> dict[str, object]:
+    if not isinstance(report, dict):
+        return {}
+    status = report.get("status_before")
+    normalized = dict(status) if isinstance(status, dict) else {}
+    for key in ("capacity_bytes", "capacity_error", "percent_full"):
+        if key in report:
+            normalized[key] = report[key]
+    return normalized
 
 
 def _device_label(device: DeviceInfo) -> str:
@@ -1804,8 +2538,19 @@ def _alert_status_text(low: float | None, high: float | None) -> str:
     return f"Alerts armed: {', '.join(parts)}."
 
 
-def _reading_context_key(reading: Reading) -> tuple[str, str, str]:
+def _reading_channel_role(reading: Reading) -> str:
+    role = str(reading.metadata.get("channel_role") or "primary").strip().lower()
+    return role if role in {"primary", "secondary"} else "primary"
+
+
+def _is_multi_channel_reading(reading: Reading) -> bool:
+    metadata = reading.metadata
+    return any(f"mode_attr_{index}" in metadata for index in range(1, 6))
+
+
+def _reading_context_key(reading: Reading) -> tuple[str, str, str, str]:
     return (
+        _reading_channel_role(reading),
         reading.measurement_type.value,
         reading.unit or "",
         reading.mode or "",
@@ -1817,7 +2562,11 @@ def _reading_context_id(reading: Reading) -> str:
 
 
 def _reading_context_label(reading: Reading) -> str:
-    parts = [reading.measurement_type.value.replace("_", " ").title()]
+    channel_role = _reading_channel_role(reading)
+    label = reading.measurement_type.value.replace("_", " ").title()
+    if _is_multi_channel_reading(reading):
+        label = f"{channel_role.title()} {label}"
+    parts = [label]
     if reading.unit:
         parts.append(reading.unit)
     if reading.mode:
@@ -1865,62 +2614,85 @@ def _build_session_replay_groups(readings: list[Reading]) -> list[_ReplayGroup]:
 def _replay_descriptor(reading: Reading) -> _ReplayDescriptor:
     measurement_type = reading.measurement_type
     unit_family = str(reading.metadata.get("unit_family") or "").strip().lower()
+    channel_role = _reading_channel_role(reading)
+
+    def _with_channel(context_id: str, label: str, normalization_key: str | None, *, is_unknown: bool = False) -> _ReplayDescriptor:
+        display_label = f"{channel_role.title()} {label}" if _is_multi_channel_reading(reading) else label
+        return _ReplayDescriptor(
+            context_id=f"{channel_role}\x1f{context_id}",
+            label=display_label,
+            normalization_key=normalization_key,
+            channel_role=channel_role,
+            is_unknown=is_unknown,
+        )
 
     if measurement_type == MeasurementType.VOLTAGE_AC:
-        return _ReplayDescriptor("voltage_ac", "Voltage AC", "voltage")
+        return _with_channel("voltage_ac", "Voltage AC", "voltage")
     if measurement_type == MeasurementType.VOLTAGE_DC:
-        return _ReplayDescriptor("voltage_dc", "Voltage DC", "voltage")
+        return _with_channel("voltage_dc", "Voltage DC", "voltage")
+    if measurement_type == MeasurementType.VOLTAGE_AC_DC:
+        return _with_channel("voltage_acdc", "Voltage AC+DC", "voltage")
     if measurement_type == MeasurementType.CURRENT_AC:
-        return _ReplayDescriptor("current_ac", "Current AC", "current")
+        return _with_channel("current_ac", "Current AC", "current")
     if measurement_type == MeasurementType.CURRENT_DC:
-        return _ReplayDescriptor("current_dc", "Current DC", "current")
+        return _with_channel("current_dc", "Current DC", "current")
     if measurement_type == MeasurementType.CURRENT_AC_DC:
-        return _ReplayDescriptor("current_acdc", "Current AC+DC", "current")
+        return _with_channel("current_acdc", "Current AC+DC", "current")
     if measurement_type == MeasurementType.CURRENT_INRUSH:
-        return _ReplayDescriptor("current_inrush", "Current Inrush", "current")
+        return _with_channel("current_inrush", "Current Inrush", "current")
     if measurement_type == MeasurementType.RESISTANCE:
-        return _ReplayDescriptor("resistance", "Resistance", "resistance")
+        return _with_channel("resistance", "Resistance", "resistance")
     if measurement_type == MeasurementType.CAPACITANCE:
-        return _ReplayDescriptor("capacitance", "Capacitance", "capacitance")
+        return _with_channel("capacitance", "Capacitance", "capacitance")
     if measurement_type == MeasurementType.FREQUENCY:
-        return _ReplayDescriptor("frequency", "Frequency", "frequency")
+        return _with_channel("frequency", "Frequency", "frequency")
     if measurement_type == MeasurementType.DUTY_CYCLE:
-        return _ReplayDescriptor("duty_cycle", "Duty Cycle", None)
+        return _with_channel("duty_cycle", "Duty Cycle", None)
     if measurement_type == MeasurementType.TEMPERATURE:
         unit_suffix = f" {reading.unit}" if reading.unit else ""
         context_id = f"temperature:{reading.unit or 'unknown'}"
-        return _ReplayDescriptor(context_id, f"Temperature{unit_suffix}", None)
+        return _with_channel(context_id, f"Temperature{unit_suffix}", None)
     if measurement_type == MeasurementType.CONTINUITY:
-        return _ReplayDescriptor("continuity", "Continuity", None)
+        return _with_channel("continuity", "Continuity", None)
+    if measurement_type == MeasurementType.CONDUCTANCE:
+        return _with_channel("conductance", "Conductance", None)
+    if measurement_type == MeasurementType.PRESSURE:
+        return _with_channel(f"pressure:{reading.unit or 'unknown'}", "Pressure", None)
+    if measurement_type == MeasurementType.FIELDSENSE:
+        return _with_channel("fieldsense", "FieldSense", "voltage")
+    if measurement_type == MeasurementType.PHASE_ROTATION:
+        return _with_channel("phase_rotation", "Phase Rotation", None)
+    if measurement_type == MeasurementType.LOW_PASS_VFD:
+        return _with_channel("low_pass_vfd", "Low-Pass VFD", "voltage")
 
     if unit_family == "voltage":
         if reading.mode == "ac":
-            return _ReplayDescriptor("voltage_ac", "Voltage AC", "voltage")
+            return _with_channel("voltage_ac", "Voltage AC", "voltage")
         if reading.mode == "dc" or reading.unit == "mV":
-            return _ReplayDescriptor("voltage_dc", "Voltage DC", "voltage")
-        return _ReplayDescriptor("voltage", "Voltage", "voltage")
+            return _with_channel("voltage_dc", "Voltage DC", "voltage")
+        return _with_channel("voltage", "Voltage", "voltage")
     if unit_family == "current":
         if reading.mode == "ac":
-            return _ReplayDescriptor("current_ac", "Current AC", "current")
+            return _with_channel("current_ac", "Current AC", "current")
         if reading.mode == "dc":
-            return _ReplayDescriptor("current_dc", "Current DC", "current")
+            return _with_channel("current_dc", "Current DC", "current")
         if reading.mode == "acdc":
-            return _ReplayDescriptor("current_acdc", "Current AC+DC", "current")
-        return _ReplayDescriptor("current", "Current", "current")
+            return _with_channel("current_acdc", "Current AC+DC", "current")
+        return _with_channel("current", "Current", "current")
     if unit_family == "resistance":
-        return _ReplayDescriptor("resistance", "Resistance", "resistance")
+        return _with_channel("resistance", "Resistance", "resistance")
     if unit_family == "capacitance":
-        return _ReplayDescriptor("capacitance", "Capacitance", "capacitance")
+        return _with_channel("capacitance", "Capacitance", "capacitance")
     if unit_family == "frequency":
-        return _ReplayDescriptor("frequency", "Frequency", "frequency")
+        return _with_channel("frequency", "Frequency", "frequency")
     if unit_family == "duty_cycle":
-        return _ReplayDescriptor("duty_cycle", "Duty Cycle", None)
+        return _with_channel("duty_cycle", "Duty Cycle", None)
     if unit_family == "temperature":
         unit_suffix = f" {reading.unit}" if reading.unit else ""
         context_id = f"temperature:{reading.unit or 'unknown'}"
-        return _ReplayDescriptor(context_id, f"Temperature{unit_suffix}", None)
+        return _with_channel(context_id, f"Temperature{unit_suffix}", None)
 
-    return _ReplayDescriptor("unknown", "Unknown / Transitional", None, is_unknown=True)
+    return _with_channel("unknown", "Unknown / Transitional", None, is_unknown=True)
 
 
 def _normalize_replay_group(readings: list[Reading], descriptor: _ReplayDescriptor) -> list[Reading]:

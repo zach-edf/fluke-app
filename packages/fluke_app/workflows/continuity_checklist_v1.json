@@ -1,0 +1,42 @@
+{
+  "workflow_id": "continuity_checklist_v1",
+  "title": "Continuity Checklist",
+  "description": "Work through a safe continuity and low-resistance inspection with captured checkpoints.",
+  "category": "Continuity",
+  "estimated_duration_min": 4,
+  "tags": [
+    "continuity",
+    "resistance",
+    "checklist"
+  ],
+  "steps": [
+    {
+      "id": "verify_power_removed",
+      "title": "Verify Power Is Removed",
+      "instruction": "Confirm the circuit is de-energized before checking continuity.",
+      "capture": false,
+      "note_prompt": "Record any safety notes."
+    },
+    {
+      "id": "capture_reference_path",
+      "title": "Capture Reference Path",
+      "instruction": "Capture the continuity or low-resistance reading for the known-good path.",
+      "capture": true,
+      "expected_measurement_type": "resistance"
+    },
+    {
+      "id": "capture_test_path",
+      "title": "Capture Test Path",
+      "instruction": "Capture the continuity or low-resistance reading for the path under test.",
+      "capture": true,
+      "expected_measurement_type": "resistance"
+    },
+    {
+      "id": "record_continuity_result",
+      "title": "Record Continuity Result",
+      "instruction": "Note whether the test path matches expectations or needs more investigation.",
+      "capture": false,
+      "note_prompt": "Summarize the path result."
+    }
+  ]
+}

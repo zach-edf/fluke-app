@@ -1,0 +1,44 @@
+{
+  "workflow_id": "battery_pack_check_v1",
+  "title": "Battery Pack Check",
+  "description": "Guide a quick DC battery pack inspection with unloaded and loaded voltage captures.",
+  "category": "Battery",
+  "estimated_duration_min": 5,
+  "tags": [
+    "battery",
+    "voltage",
+    "guided"
+  ],
+  "steps": [
+    {
+      "id": "confirm_meter_mode",
+      "title": "Confirm Meter Mode",
+      "instruction": "Set the meter to DC voltage and verify the probe polarity before touching the pack.",
+      "capture": false,
+      "note_prompt": "Record any setup notes or pack labeling."
+    },
+    {
+      "id": "measure_total_voltage",
+      "title": "Measure Total Pack Voltage",
+      "instruction": "Measure the pack at rest and capture the total DC voltage reading.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "measure_loaded_voltage",
+      "title": "Measure Loaded Voltage",
+      "instruction": "Apply the normal load and capture the pack voltage again to observe sag.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "record_pack_observation",
+      "title": "Record Observations",
+      "instruction": "Note whether the pack remained stable or showed signs of a weak cell group.",
+      "capture": false,
+      "note_prompt": "Summarize the pack behavior."
+    }
+  ]
+}

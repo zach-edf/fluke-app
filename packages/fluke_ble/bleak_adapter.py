@@ -21,6 +21,8 @@ class BleakAdapter(BleAdapter):
         self._clients: dict[str, BleakClient] = {}
         self._disconnect_callbacks: dict[str, BleDisconnectCallback] = {}
         self._deliberate_disconnect: set[str] = set()
+        self._known_devices: dict[str, Any] = {}
+        self._known_devices_by_address: dict[str, Any] = {}
 
     async def scan(self, timeout_s: float = 5.0) -> list[BleDevice]:
         try:
@@ -40,6 +42,9 @@ class BleakAdapter(BleAdapter):
         matches: list[BleDevice] = []
         for identifier, (device, adv) in discovered.items():
             name = device.name or adv.local_name
+            self._known_devices[identifier] = device
+            if device.address:
+                self._known_devices_by_address[device.address.strip().lower()] = device
             metadata = {
                 "advertisement_name": adv.local_name,
                 "service_uuids": list(adv.service_uuids or []),
@@ -56,7 +61,13 @@ class BleakAdapter(BleAdapter):
             )
         return matches
 
-    async def connect(self, device_id: str) -> None:
+    async def connect(
+        self,
+        device_id: str,
+        *,
+        ble_address: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:
         client = self._clients.get(device_id)
         if client is not None and client.is_connected:
             return
@@ -72,7 +83,12 @@ class BleakAdapter(BleAdapter):
             if cb is not None:
                 cb(device_id)
 
-        client = BleakClient(device_id, disconnected_callback=_on_disconnected)
+        connect_target = self._resolve_connect_target(device_id, ble_address=ble_address)
+        client = BleakClient(
+            connect_target,
+            disconnected_callback=_on_disconnected,
+            timeout=timeout_s or 10.0,
+        )
         await client.connect()
         self._clients[device_id] = client
 
@@ -107,9 +123,15 @@ class BleakAdapter(BleAdapter):
         payload = await client.read_gatt_char(characteristic_uuid)
         return bytes(payload)
 
-    async def write(self, device_id: str, characteristic_uuid: str, data: bytes) -> None:
+    async def write(
+        self,
+        device_id: str,
+        characteristic_uuid: str,
+        data: bytes,
+        response: bool | None = None,
+    ) -> None:
         client = self._require_client(device_id)
-        await client.write_gatt_char(characteristic_uuid, data)
+        await client.write_gatt_char(characteristic_uuid, data, response=response)
 
     async def services(self, device_id: str) -> list[BleServiceInfo]:
         client = self._require_client(device_id)
@@ -146,3 +168,17 @@ class BleakAdapter(BleAdapter):
         if client is None or not client.is_connected:
             raise RuntimeError(f"Device {device_id!r} is not connected.")
         return client
+
+    def _resolve_connect_target(self, device_id: str, *, ble_address: str | None) -> Any:
+        target = self._known_devices.get(device_id)
+        if target is not None:
+            return target
+        if ble_address:
+            target = self._known_devices_by_address.get(ble_address.strip().lower())
+            if target is not None:
+                return target
+            return ble_address
+        cached_by_id = self._known_devices_by_address.get(device_id.strip().lower())
+        if cached_by_id is not None:
+            return cached_by_id
+        return device_id

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from fluke_core.models.device import DeviceInfo
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
 from fluke_core.models.workflow import WorkflowRun, WorkflowStepResult
+
+
+class DeviceRepository(Protocol):
+    def upsert(self, device: DeviceInfo, last_seen_at: datetime | None = None) -> DeviceInfo:
+        ...
+
+    def get(self, device_id: str) -> DeviceInfo | None:
+        ...
 
 
 class SessionRepository(Protocol):

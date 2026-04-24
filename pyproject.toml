@@ -56,3 +56,6 @@ fluke-desktop = "apps.desktop.main:main"
 [tool.setuptools.packages.find]
 where = [".", "packages"]
 include = ["apps*", "fluke_*"]
+
+[tool.setuptools.package-data]
+"fluke_app.workflows" = ["*.json"]

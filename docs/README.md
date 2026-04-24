@@ -26,6 +26,7 @@ If you are new to the repo, start with the guides below instead of reading the c
 - [Fixtures and Debug Bundles](developer/fixtures-and-debug.md): contributor diagnostics workflow
 - [New Device Profile Guide](developer/new-device-profile.md): how to add a new device profile cleanly
 - [Plugins Overview](../plugins/README.md): local plugin layout and workflow/profile extension contract
+- [Release Assets Guide](release-assets.md): screenshot inventory and release-facing UI asset checklist
 
 ## Recommended Reading Order
 

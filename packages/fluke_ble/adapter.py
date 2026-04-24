@@ -35,7 +35,13 @@ class BleAdapter(Protocol):
     async def scan(self, timeout_s: float = 5.0) -> list[BleDevice]:
         ...
 
-    async def connect(self, device_id: str) -> None:
+    async def connect(
+        self,
+        device_id: str,
+        *,
+        ble_address: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:
         ...
 
     async def disconnect(self, device_id: str) -> None:
@@ -55,7 +61,13 @@ class BleAdapter(Protocol):
     async def read(self, device_id: str, characteristic_uuid: str) -> bytes:
         ...
 
-    async def write(self, device_id: str, characteristic_uuid: str, data: bytes) -> None:
+    async def write(
+        self,
+        device_id: str,
+        characteristic_uuid: str,
+        data: bytes,
+        response: bool | None = None,
+    ) -> None:
         ...
 
     async def services(self, device_id: str) -> list[BleServiceInfo]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from importlib import resources
 
 from fluke_core.enums import MeasurementType, WorkflowInteractionMode
 from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefinition, WorkflowStep
@@ -35,10 +36,12 @@ def load_workflow_catalog(
     extra_paths: list[str | Path] | tuple[str | Path, ...] = (),
 ) -> WorkflowCatalog:
     roots: list[Path] = []
-    primary = default_workflow_directory() if path is None else Path(path)
-    roots.append(primary)
-    roots.extend(Path(extra) for extra in extra_paths)
     definitions: list[WorkflowDefinition] = []
+    if path is None:
+        definitions.extend(_load_builtin_definitions())
+    else:
+        roots.append(Path(path))
+    roots.extend(Path(extra) for extra in extra_paths)
     for root in roots:
         if not root.exists():
             continue
@@ -46,8 +49,27 @@ def load_workflow_catalog(
     return WorkflowCatalog(definitions)
 
 
+def _load_builtin_definitions() -> list[WorkflowDefinition]:
+    try:
+        root = resources.files("fluke_app.workflows")
+    except ModuleNotFoundError:
+        root_path = default_workflow_directory()
+        if not root_path.exists():
+            return []
+        return [_load_definition(file_path) for file_path in sorted(root_path.glob("*.json"))]
+    definitions: list[WorkflowDefinition] = []
+    for item in sorted(root.iterdir(), key=lambda candidate: candidate.name):
+        if item.name.endswith(".json"):
+            definitions.append(_load_definition_from_text(item.read_text(encoding="utf-8")))
+    return definitions
+
+
 def _load_definition(path: Path) -> WorkflowDefinition:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    return _load_definition_from_text(path.read_text(encoding="utf-8"))
+
+
+def _load_definition_from_text(text: str) -> WorkflowDefinition:
+    payload = json.loads(text)
     steps = tuple(_step_from_payload(step) for step in payload.get("steps", []))
     return WorkflowDefinition(
         workflow_id=payload["workflow_id"],

@@ -9,7 +9,7 @@ from fluke_sdk.bootstrap import ensure_repo_paths
 
 ensure_repo_paths()
 
-from fluke_app.device_manager import DeviceManager
+from fluke_app.device_manager import ConnectionRetryPolicy, DeviceManager
 from fluke_ble.adapter import BleAdapter
 from fluke_core import ConnectionState, DeviceInfo, Reading
 from fluke_plugins import build_profile_registry
@@ -27,14 +27,24 @@ class FlukeClient:
         ble_adapter: BleAdapter | None = None,
         profile_registry: ProfileRegistry | None = None,
         device_manager: DeviceManager | None = None,
+        *,
+        auto_reconnect: bool = True,
+        retry_policy: ConnectionRetryPolicy | None = None,
     ) -> None:
         self._ble_adapter = ble_adapter or _build_ble_adapter()
         self._profiles = profile_registry or build_profile_registry()
-        self._manager = device_manager or DeviceManager(self._ble_adapter, self._profiles)
+        self._manager = device_manager or DeviceManager(
+            self._ble_adapter,
+            self._profiles,
+            retry_policy=retry_policy,
+            auto_reconnect=auto_reconnect,
+        )
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._latest: Reading | None = None
         self._stream_started = False
+        self._last_connection_error: str | None = None
         self._manager.subscribe_readings(self._handle_reading)
+        self._manager.subscribe_disconnects(self._handle_terminal_disconnect)
 
     async def scan(self, timeout_s: float = 5.0) -> list[DeviceInfo]:
         return await self._manager.scan(timeout_s=timeout_s)
@@ -42,7 +52,10 @@ class FlukeClient:
     async def connect(self, device_id: str, profile_id: str | None = None) -> DeviceInfo:
         self._stream_started = False
         self._queue = asyncio.Queue()
-        return await self._manager.connect(device_id, profile_id=profile_id)
+        self._last_connection_error = None
+        device = await self._manager.establish_session(device_id, profile_id=profile_id)
+        self._stream_started = True
+        return device
 
     async def disconnect(self) -> None:
         await self._manager.disconnect()
@@ -53,6 +66,9 @@ class FlukeClient:
 
     def latest_reading(self) -> Reading | None:
         return self._latest
+
+    def last_connection_error(self) -> str | None:
+        return self._last_connection_error
 
     def on_reading(self, handler: Callable[[Reading], None]) -> None:
         self._manager.subscribe_readings(handler)
@@ -73,10 +89,18 @@ class FlukeClient:
         self._latest = reading
         self._queue.put_nowait(reading)
 
+    def _handle_terminal_disconnect(self) -> None:
+        status = self._manager.latest_connection_diagnostics()
+        self._last_connection_error = None if status is None else (status.last_error_text or status.message)
+        self._queue.put_nowait(_SENTINEL)
+
     async def _ensure_streaming(self) -> None:
         if self._stream_started:
             return
-        await self._manager.start_stream()
+        device_id = self._manager.last_device_id()
+        if not device_id:
+            raise RuntimeError("Connect to a device before streaming readings.")
+        await self._manager.establish_session(device_id)
         self._stream_started = True
 
 

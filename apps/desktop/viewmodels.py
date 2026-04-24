@@ -58,6 +58,18 @@ class SessionCompareViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceMemorySessionViewModel:
+    preview_id: str
+    title: str
+    started_at_text: str
+    ended_at_text: str
+    measurement_text: str
+    interval_text: str
+    detail_count_text: str
+    import_status_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowDefinitionViewModel:
     workflow_id: str
     title: str
@@ -90,6 +102,16 @@ class LiveReadingViewModel:
     main_value: str = "--"
     unit_text: str = ""
     measurement_label: str = "Idle"
+    available_capabilities: tuple[str, ...] = ()
+    live_primary_reading: str = "--"
+    live_primary_unit_text: str = ""
+    live_primary_label: str = "Primary"
+    live_secondary_reading: str = "--"
+    live_secondary_unit_text: str = ""
+    live_secondary_label: str = "Secondary"
+    family_mode_badges: tuple[str, ...] = ()
+    capability_summary_text: str = ""
+    selected_live_channel: str = "primary"
     status_text: str = "Disconnected"
     connection_text: str = "Not connected"
     is_connected: bool = False
@@ -107,6 +129,10 @@ class LiveReadingViewModel:
     selected_chart_mode: str = "rolling_30s"
     chart_x_mode: str = "elapsed"
     chart_x_title: str = "Seconds"
+    logging_interval_seconds_text: str = ""
+    logging_duration_seconds_text: str = ""
+    logging_manual_stop: bool = False
+    logging_status_text: str = "Logging settings unavailable."
     chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
 
@@ -141,6 +167,13 @@ class SessionViewModel:
     selected_session_id: str | None = None
     selected_context_id: str | None = None
     selected_context_label: str = ""
+    selected_replay_channel: str = "primary"
+    available_replay_channels: tuple[str, ...] = ()
+    device_memory_status_text: str = "Device memory unavailable."
+    device_memory_capacity_text: str = ""
+    device_memory_summary_text: str = ""
+    device_memory_value_source: str = "average"
+    device_memory_sessions: tuple[DeviceMemorySessionViewModel, ...] = ()
     selected_axis_mode: str = "elapsed"
     selected_segment_id: str | None = None
     compare_session_id: str | None = None
@@ -170,6 +203,13 @@ class SettingsViewModel:
     database_path_text: str = ""
     export_directory_text: str = ""
     diagnostics_text: str = ""
+    active_device_text: str = "No device connected"
+    active_family_text: str = ""
+    active_profile_text: str = ""
+    active_services_text: str = ""
+    active_capabilities_text: str = ""
+    live_buffer_text: str = ""
+    fixture_status_text: str = ""
     theme: str = "light"
 
 
