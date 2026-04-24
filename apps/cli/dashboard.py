@@ -159,17 +159,26 @@ def render_dashboard(state: DashboardState, width: int = 60) -> str:
 async def run_dashboard(manager: "DeviceManager", args: "Namespace") -> int:
     """Run the retro sci-fi dashboard in the terminal."""
     state = DashboardState()
+    finished = asyncio.Event()
+    terminal_error: str | None = None
 
     def on_reading(reading: Reading) -> None:
         state.update(reading)
 
-    manager.subscribe_readings(on_reading)
+    def on_disconnect() -> None:
+        nonlocal terminal_error
+        status = manager.latest_connection_diagnostics()
+        terminal_error = None if status is None else (status.last_error_text or status.message)
+        state.connection_text = "RECOVERY FAILED"
+        finished.set()
 
-    device = await manager.connect(args.device, profile_id=args.profile)
+    manager.subscribe_readings(on_reading)
+    manager.subscribe_disconnects(on_disconnect)
+
+    device = await manager.establish_session(args.device, profile_id=args.profile)
     state.device_label = (device.model_name or device.nickname or device.device_id).upper()
     state.profile_label = device.profile_id or args.profile
     state.connection_text = "CONNECTED"
-    await manager.start_stream()
 
     # Clear screen and hide cursor
     print("\033[2J\033[H\033[?25l", end="", flush=True)
@@ -201,6 +210,8 @@ async def run_dashboard(manager: "DeviceManager", args: "Namespace") -> int:
                         break
                 if args.count and state.samples >= args.count:
                     break
+                if finished.is_set():
+                    break
                 await asyncio.sleep(0.25)
             except asyncio.CancelledError:
                 break
@@ -211,4 +222,7 @@ async def run_dashboard(manager: "DeviceManager", args: "Namespace") -> int:
         print("\033[?25h\033[0m")
         await manager.disconnect()
 
+    if terminal_error:
+        print(f"Dashboard ended because recovery failed: {terminal_error}")
+        return 1
     return 0

@@ -6,7 +6,7 @@ import json
 import sys
 
 from apps.cli.formatters import nonneg_float
-from apps.cli.runtime import build_device_manager, build_workflows, default_database_path, open_store
+from apps.cli.runtime import attach_connection_diagnostics, build_device_manager, build_workflows, default_database_path, open_store
 from fluke_app import SessionRecorder, WorkflowRunner, new_session
 from fluke_core.models.reading import Reading
 
@@ -71,11 +71,14 @@ async def handle_run(args: argparse.Namespace) -> int:
 
     db_path = args.database or default_database_path()
     manager = build_device_manager()
+    attach_connection_diagnostics(manager)
     store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
     runner = WorkflowRunner(catalog, store.workflow_runs, store.workflow_step_results)
 
     latest_reading: Reading | None = None
+    finished = asyncio.Event()
+    terminal_error: str | None = None
 
     def on_reading(reading: Reading) -> None:
         nonlocal latest_reading
@@ -83,10 +86,15 @@ async def handle_run(args: argparse.Namespace) -> int:
         recorder.on_reading(reading)
 
     manager.subscribe_readings(on_reading)
+    manager.subscribe_disconnects(lambda: _mark_workflow_disconnect(manager, finished, _set_terminal_error))
+
+    def _set_terminal_error(message: str) -> None:
+        nonlocal terminal_error
+        terminal_error = message
 
     try:
         print(f"Connecting to {args.device}...", file=sys.stderr)
-        device = await manager.connect(args.device, profile_id=args.profile)
+        device = await manager.establish_session(args.device, profile_id=args.profile)
         store.upsert_device(device)
 
         session = recorder.start(
@@ -97,8 +105,6 @@ async def handle_run(args: argparse.Namespace) -> int:
                 profile_id=device.profile_id or args.profile,
             )
         )
-
-        await manager.start_stream()
 
         print(f"\n{'=' * 60}")
         print(f"  WORKFLOW: {definition.title}")
@@ -124,6 +130,8 @@ async def handle_run(args: argparse.Namespace) -> int:
             if step.capture:
                 # Wait for a valid reading
                 print("  Waiting for reading... (press Enter to capture, 's' to skip)")
+                if finished.is_set():
+                    raise RuntimeError(f"Workflow stopped because recovery failed: {terminal_error or 'Device disconnected.'}")
                 action = await _prompt_step_action()
 
                 if action == "skip":
@@ -173,6 +181,8 @@ async def handle_run(args: argparse.Namespace) -> int:
         await manager.disconnect()
         store.close()
 
+    if terminal_error:
+        raise RuntimeError(f"Workflow stopped because recovery failed: {terminal_error}")
     return 0
 
 
@@ -190,3 +200,9 @@ async def _prompt_text(prompt: str) -> str | None:
     line = await loop.run_in_executor(None, sys.stdin.readline)
     text = line.strip()
     return text if text else None
+
+
+def _mark_workflow_disconnect(manager, finished: asyncio.Event, set_message) -> None:
+    status = manager.latest_connection_diagnostics()
+    set_message("" if status is None else (status.last_error_text or status.message))
+    finished.set()

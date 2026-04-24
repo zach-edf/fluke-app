@@ -33,6 +33,8 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 def initialize(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA_SQL)
+    _ensure_column(con, "devices", "family_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "devices", "variant_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "source_device_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "mode", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")

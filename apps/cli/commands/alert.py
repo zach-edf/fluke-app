@@ -13,7 +13,7 @@ import asyncio
 import sys
 
 from apps.cli.formatters import format_reading, nonneg_float
-from apps.cli.runtime import build_device_manager
+from apps.cli.runtime import attach_connection_diagnostics, build_device_manager
 from fluke_core.models.reading import Reading
 
 
@@ -44,7 +44,10 @@ async def handle(args: argparse.Namespace) -> int:
         print("Warning: no thresholds set. Use --high and/or --low to enable alerts.", file=sys.stderr)
 
     manager = build_device_manager()
+    attach_connection_diagnostics(manager)
     alert_count = 0
+    finished = asyncio.Event()
+    terminal_error: str | None = None
 
     def on_reading(reading: Reading) -> None:
         nonlocal alert_count
@@ -70,6 +73,11 @@ async def handle(args: argparse.Namespace) -> int:
             print(f"{_GREEN}\u2713{_RESET} {line}")
 
     manager.subscribe_readings(on_reading)
+    manager.subscribe_disconnects(lambda: _handle_disconnect(manager, finished, _set_terminal_error))
+
+    def _set_terminal_error(message: str) -> None:
+        nonlocal terminal_error
+        terminal_error = message
 
     thresholds = []
     if args.low is not None:
@@ -79,15 +87,14 @@ async def handle(args: argparse.Namespace) -> int:
     threshold_text = ", ".join(thresholds) if thresholds else "none"
 
     print(f"Connecting to {args.device}...", file=sys.stderr)
-    await manager.connect(args.device, profile_id=args.profile)
+    await manager.establish_session(args.device, profile_id=args.profile)
     print(f"Streaming with alerts ({threshold_text}). Press Ctrl+C to stop.", file=sys.stderr)
-    await manager.start_stream()
 
     try:
         if args.duration > 0:
-            await asyncio.sleep(args.duration)
+            await asyncio.wait_for(finished.wait(), timeout=args.duration)
         else:
-            await asyncio.Future()
+            await finished.wait()
     except asyncio.TimeoutError:
         pass
     finally:
@@ -95,4 +102,13 @@ async def handle(args: argparse.Namespace) -> int:
         if alert_count:
             print(f"\n{_RED}{alert_count} alert(s) triggered.{_RESET}", file=sys.stderr)
 
+    if terminal_error:
+        print(f"Alert stream ended because recovery failed: {terminal_error}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _handle_disconnect(manager, finished: asyncio.Event, set_message) -> None:
+    status = manager.latest_connection_diagnostics()
+    set_message("" if status is None else (status.last_error_text or status.message))
+    finished.set()

@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from fluke_app import DeviceManager, EventBus, ReadingStreamService
+from fluke_app import ConnectionAttemptStatus, DeviceManager, EventBus, ReadingStreamService
 from fluke_plugins import build_profile_registry, build_workflow_catalog, load_plugin_bundle
 from fluke_store import FlukeStore
 
@@ -55,6 +55,35 @@ def build_device_manager() -> DeviceManager:
         event_bus=EventBus(),
         reading_stream=ReadingStreamService(),
     )
+
+
+def attach_connection_diagnostics(manager: DeviceManager) -> None:
+    last_signature: tuple[object, ...] | None = None
+
+    def _on_status(status: ConnectionAttemptStatus) -> None:
+        nonlocal last_signature
+        signature = (
+            status.phase,
+            status.target_device_id,
+            status.attempt,
+            status.total_attempts,
+            status.last_error_text,
+            round(status.window_elapsed_s, 1),
+        )
+        if signature == last_signature:
+            return
+        last_signature = signature
+        phase_label = status.phase.replace("_", " ")
+        attempt_label = ""
+        if status.total_attempts > 0:
+            attempt_label = f" ({status.attempt}/{status.total_attempts})"
+        prefix = "recovery" if status.is_recovery else "connect"
+        detail = f"[{prefix}:{phase_label}{attempt_label}] {status.message}"
+        if status.last_error_text:
+            detail = f"{detail} Last error: {status.last_error_text}"
+        print(detail, file=sys.stderr)
+
+    manager.subscribe_connection_diagnostics(_on_status)
 
 
 def open_store(path: str | None = None) -> FlukeStore:

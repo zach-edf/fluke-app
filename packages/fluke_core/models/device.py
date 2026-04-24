@@ -10,6 +10,8 @@ class DeviceInfo:
     ble_address: str
     model_name: str
     profile_id: str
+    family_id: str = ""
+    variant_id: str = ""
     nickname: str | None = None
     firmware_version: str | None = None
     serial_number: str | None = None

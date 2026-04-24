@@ -152,6 +152,103 @@ class CaptureExportTests(unittest.TestCase):
         finally:
             store.close()
 
+    def test_export_service_preserves_multi_channel_family_metadata(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "exports-multichannel.db")
+        try:
+            device = DeviceInfo(
+                device_id="meter-advanced-clamp-export",
+                ble_address="AA:BB:CC:DD:EE:37",
+                model_name="Fluke 378 FC",
+                profile_id="fluke_advanced_clamp_family",
+                family_id="fluke_advanced_clamp",
+                variant_id="378fc",
+                nickname="Advanced Clamp Bench",
+                support_level="supported",
+            )
+            store.upsert_device(device)
+            session = new_session(device_id=device.device_id, title="Advanced Clamp Export Session", profile_id=device.profile_id)
+            store.sessions.create(session)
+
+            timestamp = datetime(2026, 4, 13, 12, 0, 0, tzinfo=timezone.utc)
+            common_metadata = {
+                "family_id": "fluke_advanced_clamp",
+                "variant_id": "378fc",
+                "sample_group_id": "grp-1",
+                "family_mode_badges": ["Clockwise", "FieldSense"],
+                "mode_attr_1": 8,
+                "mode_attr_2": 2,
+                "mode_attr_3": 7,
+                "mode_attr_4": 1,
+                "mode_attr_5": 1,
+            }
+            store.readings.append(
+                session.session_id,
+                Reading(
+                    timestamp_utc=timestamp,
+                    value=12.3,
+                    unit="V",
+                    measurement_type=MeasurementType.VOLTAGE_DC,
+                    status=ReadingStatus.OK,
+                    display_text="12.3 V",
+                    source_device_id=device.device_id,
+                    mode="dc",
+                    metadata={**common_metadata, "channel_role": "primary", "unit_family": "voltage"},
+                ),
+            )
+            store.readings.append(
+                session.session_id,
+                Reading(
+                    timestamp_utc=timestamp,
+                    value=0.45,
+                    unit="A",
+                    measurement_type=MeasurementType.CURRENT_DC,
+                    status=ReadingStatus.OK,
+                    display_text="0.45 A",
+                    source_device_id=device.device_id,
+                    mode="dc",
+                    metadata={**common_metadata, "channel_role": "secondary", "unit_family": "current"},
+                ),
+            )
+
+            service = ExportService(
+                store.sessions,
+                store.readings,
+                store.markers,
+                SessionCsvExporter(),
+                SessionJsonExporter(device_repo=store.devices),
+            )
+
+            csv_path = Path(service.export_csv(session.session_id, tmp / "advanced-clamp.csv"))
+            analysis_path = Path(service.export_analysis_csv(session.session_id, tmp / "advanced-clamp-analysis.csv"))
+            json_path = Path(service.export_json(session.session_id, tmp / "advanced-clamp.json"))
+
+            with csv_path.open("r", encoding="utf-8", newline="") as f:
+                csv_rows = list(csv.DictReader(f))
+            self.assertEqual(len(csv_rows), 2)
+            self.assertEqual(csv_rows[0]["channel_role"], "primary")
+            self.assertEqual(csv_rows[1]["channel_role"], "secondary")
+            self.assertEqual(csv_rows[0]["sample_group_id"], "grp-1")
+            self.assertEqual(csv_rows[0]["family_id"], "fluke_advanced_clamp")
+
+            with analysis_path.open("r", encoding="utf-8", newline="") as f:
+                analysis_rows = list(csv.DictReader(f))
+            self.assertEqual(len(analysis_rows), 1)
+            self.assertIn("primary_voltage_dc_v", analysis_rows[0])
+            self.assertIn("secondary_current_dc_ma", analysis_rows[0])
+            self.assertEqual(analysis_rows[0]["primary_voltage_dc_v"], "12.3")
+            self.assertEqual(analysis_rows[0]["secondary_current_dc_ma"], "450.0")
+
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["device"]["family_id"], "fluke_advanced_clamp")
+            self.assertEqual(payload["device"]["variant_id"], "378fc")
+            self.assertEqual(payload["available_channels"], ["primary", "secondary"])
+        finally:
+            store.close()
+
 
 def _store_reading(
     value: float,

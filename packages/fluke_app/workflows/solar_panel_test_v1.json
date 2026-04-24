@@ -1,0 +1,44 @@
+{
+  "workflow_id": "solar_panel_test_v1",
+  "title": "Solar Panel Test",
+  "description": "Compare open-circuit and loaded panel voltage readings using a repeatable checklist.",
+  "category": "Solar",
+  "estimated_duration_min": 6,
+  "tags": [
+    "solar",
+    "voltage",
+    "field"
+  ],
+  "steps": [
+    {
+      "id": "confirm_sun_conditions",
+      "title": "Confirm Conditions",
+      "instruction": "Confirm the panel is illuminated and record notable conditions like shade or cloud cover.",
+      "capture": false,
+      "note_prompt": "Describe the panel conditions."
+    },
+    {
+      "id": "measure_open_circuit_voltage",
+      "title": "Measure Open-Circuit Voltage",
+      "instruction": "Disconnect the load and capture the panel open-circuit DC voltage.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "measure_loaded_voltage",
+      "title": "Measure Loaded Voltage",
+      "instruction": "Reconnect the load and capture the panel voltage under load.",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V"
+    },
+    {
+      "id": "record_panel_result",
+      "title": "Record Result",
+      "instruction": "Note whether the loaded voltage is reasonable for the panel and conditions.",
+      "capture": false,
+      "note_prompt": "Describe the panel result."
+    }
+  ]
+}

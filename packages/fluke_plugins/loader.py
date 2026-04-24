@@ -11,7 +11,7 @@ from typing import Any
 from fluke_app.workflow_catalog import load_workflow_catalog
 from fluke_protocol import ProfileRegistry
 from fluke_protocol.profiles.base import DeviceProfile
-from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile
+from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile, FlukeAdvancedClampFamilyProfile, FlukeClampMeterFamilyProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,4 +147,4 @@ def _call_registration(module: ModuleType, callable_name: str, root: Path) -> Pl
 
 
 def _builtin_profiles() -> list[DeviceProfile]:
-    return [Fluke376FCProfile()]
+    return [FlukeClampMeterFamilyProfile(), FlukeAdvancedClampFamilyProfile(), Fluke376FCProfile()]

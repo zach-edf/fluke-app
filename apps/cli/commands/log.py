@@ -5,7 +5,7 @@ import asyncio
 import sys
 
 from apps.cli.formatters import format_reading, nonneg_float, nonneg_int, parse_tags
-from apps.cli.runtime import build_device_manager, default_database_path, open_store
+from apps.cli.runtime import attach_connection_diagnostics, build_device_manager, default_database_path, open_store
 from fluke_app import ExportService, SessionRecorder, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 from fluke_core.models.reading import Reading
@@ -30,11 +30,13 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 async def handle(args: argparse.Namespace) -> int:
     db_path = args.database or default_database_path()
     manager = build_device_manager()
+    attach_connection_diagnostics(manager)
     store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
 
     recorded = 0
     finished = asyncio.Event()
+    terminal_error: str | None = None
 
     def on_reading(reading: Reading) -> None:
         nonlocal recorded
@@ -46,10 +48,15 @@ async def handle(args: argparse.Namespace) -> int:
             finished.set()
 
     manager.subscribe_readings(on_reading)
+    manager.subscribe_disconnects(lambda: _mark_logging_disconnect(manager, finished, _set_terminal_error))
+
+    def _set_terminal_error(message: str) -> None:
+        nonlocal terminal_error
+        terminal_error = message
 
     try:
         print(f"Connecting to {args.device}...", file=sys.stderr)
-        device = await manager.connect(args.device, profile_id=args.profile)
+        device = await manager.establish_session(args.device, profile_id=args.profile)
         store.upsert_device(device)
 
         session = recorder.start(
@@ -64,17 +71,16 @@ async def handle(args: argparse.Namespace) -> int:
         )
 
         print(f"Starting logging session {session.session_id} from {device.device_id}. Press Ctrl+C to stop.")
-        await manager.start_stream()
 
         try:
             if args.duration > 0 and args.count > 0:
                 await asyncio.wait_for(finished.wait(), timeout=args.duration)
             elif args.duration > 0:
-                await asyncio.sleep(args.duration)
+                await asyncio.wait_for(finished.wait(), timeout=args.duration)
             elif args.count > 0:
                 await finished.wait()
             else:
-                await asyncio.Future()
+                await finished.wait()
         except asyncio.TimeoutError:
             pass
     finally:
@@ -84,6 +90,8 @@ async def handle(args: argparse.Namespace) -> int:
 
     if completed is None:
         raise RuntimeError("Session did not start.")
+    if terminal_error:
+        raise RuntimeError(f"Logging stopped because recovery failed: {terminal_error}")
 
     print(f"Saved session {completed.session_id} with {recorded} readings to {db_path}.")
 
@@ -105,3 +113,9 @@ async def handle(args: argparse.Namespace) -> int:
             store.close()
 
     return 0
+
+
+def _mark_logging_disconnect(manager, finished: asyncio.Event, set_message) -> None:
+    status = manager.latest_connection_diagnostics()
+    set_message("" if status is None else (status.last_error_text or status.message))
+    finished.set()

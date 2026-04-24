@@ -57,6 +57,8 @@ The desktop app includes several shortcuts:
 
 The `Home` tab is the high-level status view.
 
+![Home overview](fluke-app-screenshots/desktop-home-overview.png)
+
 It shows:
 
 - connection state
@@ -75,6 +77,8 @@ Use this tab when you want a quick overview without switching to the more detail
 ## Device Discovery Tab
 
 The `Device Discovery` tab is where you scan for devices and initiate a connection.
+
+![Device Discovery tab](fluke-app-screenshots/desktop-device-discovery-connected.png)
 
 ### What it shows
 
@@ -97,9 +101,12 @@ Once connected successfully, the live reading tab begins receiving stream data.
 
 The `Live Reading` tab is the main real-time monitoring screen.
 
+![Live Reading tab](fluke-app-screenshots/desktop-live-reading-standard.png)
+
 ### What it shows
 
 - current reading value
+- advanced devices can also show primary and secondary live readings
 - unit
 - measurement type
 - reading status
@@ -111,6 +118,8 @@ The `Live Reading` tab is the main real-time monitoring screen.
 - last update time
 - summary statistics
 - marker count
+- device logging settings controls when the connected meter supports them
+- family-mode badges when the connected meter exposes richer mode state
 
 ### Session controls
 
@@ -123,6 +132,14 @@ The live page includes:
 - `Add Marker`
 - `Export Live Chart`
 - `Disconnect`
+
+If the connected device exposes device-side logging configuration, the page also includes:
+
+- `Read Device Settings`
+- `Apply Device Settings`
+- interval input
+- duration input
+- `Manual stop`
 
 When you click `Start Logging`, the app creates a session using the title and notes currently entered on the page.
 
@@ -190,6 +207,18 @@ Important behavior:
 
 If the app is still connected but no new reading arrives for several seconds, the connection state is marked stale and the live page shows a warning banner that the device may be unresponsive.
 
+### Advanced clamp devices
+
+When a supported advanced clamp device is connected, the live page can also show:
+
+- primary and secondary live values
+- family-mode badges such as field/mode indicators
+- a primary/secondary channel-aware live presentation
+
+The primary channel remains the default charted value in the current desktop UI.
+
+![Advanced clamp live panel](fluke-app-screenshots/desktop-live-reading-advanced-clamp.png)
+
 ### Disconnects and reconnects
 
 If the device disconnects unexpectedly:
@@ -205,6 +234,8 @@ The `Reconnect Last Device` action on the `Home` tab is a separate manual reconn
 
 The `Session` tab is the review and export area for recorded sessions.
 
+![Session replay](fluke-app-screenshots/desktop-session-replay.png)
+
 ### What it shows
 
 - recent session list
@@ -217,6 +248,7 @@ The `Session` tab is the review and export area for recorded sessions.
 - segment selector when using segment view
 - session notes
 - markers table
+- device-memory browser controls when the connected meter supports saved on-device sessions
 
 ### Selecting a session
 
@@ -280,9 +312,29 @@ From the session page you can export:
 
 The export path uses the current desktop export directory from `Settings`.
 
+### Device memory browser
+
+When the connected meter supports saved on-device logging memory, the session page can also browse and import that data.
+
+Available actions can include:
+
+- reading memory status
+- browsing saved device-memory sessions
+- previewing decoded sessions before import
+- importing selected sessions
+- importing all browsed sessions
+- importing all browsed sessions and then clearing device memory
+- clearing device memory directly
+
+Imported device-memory sessions are persisted as normal sessions and then appear in the same recent-session, replay, comparison, and export flows as any other captured session.
+
+![Session device-memory browser](fluke-app-screenshots/desktop-session-device-memory-browser.png)
+
 ## Workflows Tab
 
 The `Workflows` tab handles guided procedures.
+
+![Workflow runner](fluke-app-screenshots/desktop-workflows-runner.png)
 
 You can:
 
@@ -321,12 +373,19 @@ Because workflows are a larger feature area, see [Workflows Page Guide](workflow
 
 The `Settings` tab exposes app-level desktop settings and diagnostics.
 
+![Settings diagnostics](fluke-app-screenshots/desktop-settings-diagnostics.png)
+
 ### What it shows
 
 - database path
 - runtime diagnostics text
 - export directory input
 - theme selector
+- active device/family/profile summary when connected
+- active capability summary when connected
+- runtime services summary when connected
+- live raw-buffer/fixture status
+- raw fixture export action
 
 ### Export directory
 
@@ -346,6 +405,22 @@ Important note:
 
 - this setting currently applies to the running app session only
 - it is not persisted to a separate settings store across restarts
+
+### Diagnostics and device info
+
+The settings page is also the main diagnostics surface for the desktop app.
+
+When a device is connected, it can show:
+
+- active device id
+- family and variant ids
+- resolved profile
+- capability summary
+- runtime services summary
+- connection/reconnect diagnostic text
+- recent raw live-buffer status for fixture capture
+
+Use this page when you need to confirm exactly what the app thinks is connected and which feature panels should be active.
 
 ### Themes
 

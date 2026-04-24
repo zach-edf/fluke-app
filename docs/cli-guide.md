@@ -9,6 +9,7 @@ The CLI is the fastest way to:
 - scan for devices
 - stream live readings
 - record sessions into SQLite
+- import saved device-memory sessions into SQLite
 - export session data
 - run workflows from the terminal
 - inspect plugins and supported profiles
@@ -251,6 +252,36 @@ fluke sessions export --session "<SESSION_ID>" --format csv --output exports/ses
 fluke sessions export --session "<SESSION_ID>" --format json --output exports/session.json
 ```
 
+### `sessions import-device-memory`
+
+Use this to download saved on-device logging sessions and persist them as normal sessions/readings in the local database.
+
+```powershell
+fluke sessions import-device-memory `
+  --device "<DEVICE_ID>" `
+  --value-source average `
+  --data-output artifacts/device-memory.bin `
+  --download-report-output artifacts/device-memory.json
+```
+
+Behavior:
+
+- runs the validated Fluke 376 FC device-memory download flow
+- decodes recognized 18-byte blocks into sessions and detail rows
+- imports each decoded saved session as a normal SQLite session with readings
+- defaults to importing the `average` value from each detail block
+- skips sessions that were already imported earlier from the same raw payload
+
+Options:
+
+- `--database` on the parent `sessions` command
+- `--device`
+- `--value-source {average,maximum,minimum}`
+- `--data-output`
+- `--download-report-output`
+- `--max-blocks-per-request`
+- `--command-timeout-seconds`
+
 ### `workflow list`
 
 Use this to see the workflow catalog currently available to the CLI.
@@ -359,6 +390,107 @@ The debug bundle includes summarized information about:
 - plugins
 - database state
 
+### `debug probe`
+
+Use this to inspect a connected device's GATT layout and capture evidence for unsupported BLE features.
+
+```powershell
+fluke debug probe --device "<DEVICE_ID>" --read --notify-seconds 5 --output artifacts/probe.json
+```
+
+Options:
+
+- `--device`
+- `--read`
+- `--notify-seconds`
+- `--output`
+
+Behavior:
+
+- connects directly to the target BLE device
+- enumerates services and characteristics
+- optionally attempts reads on readable characteristics
+- optionally subscribes to notify and indicate characteristics for a short capture window
+- prints a summary and can save the full JSON report for later analysis
+
+### `debug transact`
+
+Use this to inspect a single characteristic with controlled read, write, and notify capture steps.
+
+```powershell
+fluke debug transact --device "<DEVICE_ID>" --char <UUID> --read-before --write-hex "01" --read-after
+```
+
+Options:
+
+- `--device`
+- `--char`
+- `--read-before`
+- `--write-hex`
+- `--write-mode {auto,response,no-response}`
+- `--read-after`
+- `--notify-seconds`
+- `--settle-seconds`
+- `--output`
+
+### `debug logging-config`
+
+Use this to read and decode the Fluke 376 FC logging settings characteristic.
+
+```powershell
+fluke debug logging-config --device "<DEVICE_ID>" --output artifacts/logging-config.json
+```
+
+Behavior:
+
+- reads characteristic `b6982907-7562-11e2-b50d-00163e46f8fe`
+- decodes the payload as:
+  - bytes `0-3`: interval in seconds, little-endian `uint32`
+  - bytes `4-7`: duration in seconds, little-endian `uint32`
+- reports `duration_seconds = 0` as the app's `Manual` duration mode
+
+### `debug logging-config-set`
+
+Use this to write an experimental logging interval and duration to the meter.
+
+```powershell
+fluke debug logging-config-set `
+  --device "<DEVICE_ID>" `
+  --interval-seconds 165 `
+  --duration-seconds 7200 `
+  --read-before `
+  --read-after
+```
+
+Behavior:
+
+- writes the validated 8-byte config layout
+- does not require a separate apply step for the validated finite-duration case
+
+### `debug logging-download`
+
+Use this to run the validated saved-memory download flow on the Fluke 376 FC.
+
+```powershell
+fluke debug logging-download `
+  --device "<DEVICE_ID>" `
+  --data-output artifacts/logging-download.bin `
+  --output artifacts/logging-download.json
+```
+
+Behavior:
+
+- reads `2906` status and `290d` capacity
+- subscribes to:
+  - `2906` status notifications
+  - `2908` control-point notifications
+  - `2917` download-buffer notifications
+- if needed, writes `0x83` to `2908` to lock for download
+- requests blocks from `2917` using the 9-byte `0x84 + start_block + block_count` control-point payload
+- saves the raw downloaded bytes and a JSON report with control/status transitions
+- decodes any recognized 18-byte logging blocks into session/header/detail summaries under `decoded_sessions`
+- unlocks with `0x86` when finished
+
 ## Common CLI Workflows
 
 ### Discover and stream
@@ -385,6 +517,7 @@ fluke log `
 ```powershell
 fluke sessions list
 fluke sessions export --session "<SESSION_ID>" --format json --output exports/session.json
+fluke sessions import-device-memory --device "<DEVICE_ID>"
 ```
 
 ### Run a workflow
@@ -398,6 +531,7 @@ fluke workflow run --workflow battery_pack_check_v1 --device "<DEVICE_ID>"
 
 ```powershell
 fluke fixtures capture --device "<DEVICE_ID>" --profile fluke_376fc --duration 10 --output fixtures/capture.json
+fluke debug probe --device "<DEVICE_ID>" --read --notify-seconds 5 --output artifacts/probe.json
 fluke debug bundle --output artifacts/debug-bundle.zip
 ```
 
@@ -415,6 +549,7 @@ Commands that commonly use the database:
 
 - `log`
 - `sessions list`
+- `sessions import-device-memory`
 - `sessions export`
 - `workflow run`
 - `debug bundle`

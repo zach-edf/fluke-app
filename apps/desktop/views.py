@@ -115,6 +115,20 @@ def _selected_table_id(table: QTableWidget) -> object | None:
     return item.data(0x0100) if item else None
 
 
+def _selected_table_ids(table: QTableWidget) -> list[object]:
+    row_ids: list[object] = []
+    seen_rows: set[int] = set()
+    for item in table.selectedItems():
+        row = item.row()
+        if row in seen_rows:
+            continue
+        seen_rows.add(row)
+        row_item = table.item(row, 0)
+        if row_item is not None:
+            row_ids.append(row_item.data(0x0100))
+    return row_ids
+
+
 def _sync_list_rows(list_widget, item_cls, rows: list[tuple[object, str]]) -> None:
     """Sync a QListWidget (used for simple lists like workflow catalog)."""
     current_rows = [
@@ -859,10 +873,20 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     chart_mode.addItem("Rolling 5m", "rolling_5m")
     chart_mode.addItem("Since Mode Start", "since_mode_start")
     chart_mode.addItem("Since Session Start", "since_session_start")
+    live_channel = QComboBox()
+    live_channel.addItem("Primary", "primary")
+    live_channel.addItem("Secondary", "secondary")
+    live_channel.setToolTip("Choose which live channel drives the main readout and chart")
     last_updated = QLabel()
     session = QLabel()
     summary = QLabel()
     marker_count = QLabel()
+    capability_summary = QLabel()
+    capability_summary.setWordWrap(True)
+    primary_reading = QLabel()
+    secondary_reading = QLabel()
+    family_badges = QLabel()
+    family_badges.setWordWrap(True)
     alert_status = QLabel()
     alert_status.setWordWrap(True)
     alert_status.setObjectName("alert_status")
@@ -910,6 +934,20 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
 
     marker_input = QLineEdit()
     marker_input.setPlaceholderText("Add a marker note during logging")
+    logging_interval_input = QLineEdit()
+    logging_interval_input.setPlaceholderText("Interval seconds")
+    logging_interval_input.setToolTip("Logging interval in seconds")
+    logging_duration_input = QLineEdit()
+    logging_duration_input.setPlaceholderText("Duration seconds")
+    logging_duration_input.setToolTip("Finite logging duration in seconds")
+    logging_manual_checkbox = QCheckBox("Manual stop")
+    logging_manual_checkbox.setToolTip("When checked, duration is written as manual stop")
+    logging_status = QLabel("Logging settings unavailable.")
+    logging_status.setWordWrap(True)
+    read_logging_button = QPushButton("Read Device Settings")
+    read_logging_button.setToolTip("Read the meter's current logging interval and duration")
+    apply_logging_button = QPushButton("Apply Device Settings")
+    apply_logging_button.setToolTip("Write the current logging interval and duration to the meter")
 
     start_button = QPushButton("Start Logging")
     start_button.setObjectName("primary_button")
@@ -951,6 +989,21 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     chart_mode.currentIndexChanged.connect(
         lambda: _safe_call(runtime, lambda: runtime.presenter.select_live_chart_mode(chart_mode.currentData()))
     )
+    live_channel.currentIndexChanged.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.select_live_channel(live_channel.currentData()))
+    )
+    logging_manual_checkbox.toggled.connect(
+        lambda checked: logging_duration_input.setEnabled(not checked)
+    )
+    read_logging_button.clicked.connect(
+        lambda: _submit(runtime, runtime.presenter.read_device_logging_config())
+    )
+    apply_logging_button.clicked.connect(
+        lambda: _safe_call(
+            runtime,
+            lambda: _apply_logging_settings(runtime, logging_interval_input, logging_duration_input, logging_manual_checkbox),
+        )
+    )
 
     action_row = QHBoxLayout()
     action_row.addWidget(start_button)
@@ -971,16 +1024,65 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     marker_row.addWidget(marker_input, 1)
     marker_row.addWidget(add_marker_button)
 
+    logging_form = QFormLayout()
+    logging_form.addRow("Log Interval", logging_interval_input)
+    logging_form.addRow("Log Duration", logging_duration_input)
+    logging_form.addRow("", logging_manual_checkbox)
+    logging_button_row = QHBoxLayout()
+    logging_button_row.addWidget(read_logging_button)
+    logging_button_row.addWidget(apply_logging_button)
+
+    device_panel = QWidget()
+    device_panel_layout = QVBoxLayout(device_panel)
+    device_panel_layout.setContentsMargins(0, 0, 0, 0)
+    device_header = QLabel("Common Live Panel")
+    device_header.setObjectName("section_header")
+    device_panel_layout.addWidget(device_header)
     for widget in (value, unit, measurement, status):
-        layout.addWidget(widget)
-    layout.addLayout(connection_row)
+        device_panel_layout.addWidget(widget)
+    device_panel_layout.addLayout(connection_row)
+    device_panel_layout.addWidget(capability_summary)
     for widget in (chart_notice, alert_banner, alert_status, session, last_updated, summary, marker_count):
-        layout.addWidget(widget)
-    layout.addWidget(chart.widget, 1)
-    layout.addLayout(alert_row)
-    layout.addLayout(form)
-    layout.addLayout(marker_row)
-    layout.addLayout(action_row)
+        device_panel_layout.addWidget(widget)
+    device_panel_layout.addWidget(chart.widget, 1)
+    device_panel_layout.addLayout(alert_row)
+
+    family_panel = QWidget()
+    family_panel_layout = QVBoxLayout(family_panel)
+    family_panel_layout.setContentsMargins(0, 0, 0, 0)
+    family_header = QLabel("Advanced Clamp Live Panel")
+    family_header.setObjectName("section_header")
+    family_panel_layout.addWidget(family_header)
+    family_panel_layout.addWidget(primary_reading)
+    family_panel_layout.addWidget(secondary_reading)
+    family_panel_layout.addWidget(family_badges)
+    family_panel_layout.addWidget(QLabel("Live Channel"))
+    family_panel_layout.addWidget(live_channel)
+
+    logging_panel = QWidget()
+    logging_panel_layout = QVBoxLayout(logging_panel)
+    logging_panel_layout.setContentsMargins(0, 0, 0, 0)
+    logging_header = QLabel("Logging Panel")
+    logging_header.setObjectName("section_header")
+    logging_panel_layout.addWidget(logging_header)
+    logging_panel_layout.addWidget(logging_status)
+    logging_panel_layout.addLayout(logging_form)
+    logging_panel_layout.addLayout(logging_button_row)
+
+    recorder_panel = QWidget()
+    recorder_panel_layout = QVBoxLayout(recorder_panel)
+    recorder_panel_layout.setContentsMargins(0, 0, 0, 0)
+    recorder_header = QLabel("Recorder Panel")
+    recorder_header.setObjectName("section_header")
+    recorder_panel_layout.addWidget(recorder_header)
+    recorder_panel_layout.addLayout(form)
+    recorder_panel_layout.addLayout(marker_row)
+    recorder_panel_layout.addLayout(action_row)
+
+    layout.addWidget(device_panel)
+    layout.addWidget(family_panel)
+    layout.addWidget(logging_panel)
+    layout.addWidget(recorder_panel)
 
     scroll = QScrollArea()
     scroll.setWidget(panel)
@@ -992,10 +1094,28 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
         refs={
             "value": value, "unit": unit, "measurement": measurement,
             "status": status, "connection_dot": connection_dot, "connection": connection,
+            "live_channel": live_channel,
+            "capability_summary": capability_summary,
+            "primary_reading": primary_reading,
+            "secondary_reading": secondary_reading,
+            "family_badges": family_badges,
+            "device_panel": device_panel,
+            "device_header": device_header,
+            "family_panel": family_panel,
+            "family_header": family_header,
+            "logging_panel": logging_panel,
+            "recorder_panel": recorder_panel,
             "chart_notice": chart_notice, "alert_banner": alert_banner, "session": session,
             "alert_status": alert_status, "last_updated": last_updated, "summary": summary,
             "marker_count": marker_count, "title_input": title_input,
             "marker_input": marker_input,
+            "logging_interval_input": logging_interval_input,
+            "logging_duration_input": logging_duration_input,
+            "logging_manual_checkbox": logging_manual_checkbox,
+            "logging_status": logging_status,
+            "logging_header": logging_header,
+            "read_logging_button": read_logging_button,
+            "apply_logging_button": apply_logging_button,
             "start_button": start_button, "stop_button": stop_button,
             "add_marker_button": add_marker_button,
             "export_chart_button": export_chart_button,
@@ -1021,6 +1141,10 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     export_status.setWordWrap(True)
     context_filter = QComboBox()
     context_filter.setToolTip("Filter replay chart and summary by measurement context")
+    replay_channel_filter = QComboBox()
+    replay_channel_filter.addItem("Primary", "primary")
+    replay_channel_filter.addItem("Secondary", "secondary")
+    replay_channel_filter.setToolTip("Select which session channel to review when multiple channels exist")
     axis_filter = QComboBox()
     axis_filter.addItem("Elapsed Time", "elapsed")
     axis_filter.addItem("UTC Timestamp", "utc")
@@ -1052,6 +1176,34 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     export_segments.setToolTip("Export the selected session's derived mode segments and marker summary")
     export_chart = QPushButton("Export Session Chart")
     export_chart.setToolTip("Save the session chart as a PNG image")
+    refresh_memory_status = QPushButton("Refresh Memory Status")
+    refresh_memory_status.setToolTip("Read device-memory bytes, blocks, and capacity from the connected meter")
+    browse_device_memory = QPushButton("Browse Device Memory")
+    browse_device_memory.setToolTip("Download device-memory contents and preview the saved sessions before importing")
+    import_selected_memory = QPushButton("Import Selected")
+    import_selected_memory.setToolTip("Import the selected saved sessions from the device-memory browser")
+    import_all_memory = QPushButton("Import All")
+    import_all_memory.setToolTip("Import every session currently shown in the device-memory browser")
+    import_all_and_clear = QPushButton("Import All + Clear")
+    import_all_and_clear.setToolTip("Import every browsed session, then clear the device memory")
+    clear_device_memory = QPushButton("Clear Device Memory")
+    clear_device_memory.setToolTip("Erase saved sessions from the connected meter")
+    memory_status = QLabel("Device memory unavailable.")
+    memory_status.setWordWrap(True)
+    memory_capacity = QLabel()
+    memory_capacity.setWordWrap(True)
+    memory_summary = QLabel()
+    memory_summary.setWordWrap(True)
+    memory_value_source = QComboBox()
+    memory_value_source.addItem("Average", "average")
+    memory_value_source.addItem("Maximum", "maximum")
+    memory_value_source.addItem("Minimum", "minimum")
+    memory_value_source.setToolTip("Choose which decoded value is imported into each saved-memory session")
+    memory_preview = _make_table(
+        ["Title", "Started", "Ended", "Measurement", "Interval", "Details", "Import"],
+        min_height=160,
+    )
+    memory_preview.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
     def on_selection_changed() -> None:
         selected_id = _selected_table_id(recent)
@@ -1062,6 +1214,9 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     def on_context_changed() -> None:
         _safe_call(runtime, lambda: runtime.presenter.select_session_context(context_filter.currentData()))
 
+    def on_replay_channel_changed() -> None:
+        _safe_call(runtime, lambda: runtime.presenter.select_session_replay_channel(replay_channel_filter.currentData()))
+
     def on_compare_changed() -> None:
         _safe_call(runtime, lambda: runtime.presenter.select_compare_session(compare_filter.currentData()))
 
@@ -1070,6 +1225,9 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
 
     def on_segment_changed() -> None:
         _safe_call(runtime, lambda: runtime.presenter.select_session_segment(segment_filter.currentData()))
+
+    def on_memory_selection_changed() -> None:
+        import_selected_memory.setEnabled(bool(_selected_table_ids(memory_preview)))
 
     export_csv.clicked.connect(
         lambda: _export_and_notify(
@@ -1116,8 +1274,52 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "Segment Summary JSON",
         )
     )
+    refresh_memory_status.clicked.connect(lambda: _submit(runtime, runtime.presenter.refresh_device_memory_status()))
+    browse_device_memory.clicked.connect(
+        lambda: _submit(runtime, runtime.presenter.browse_device_memory(memory_value_source.currentData()))
+    )
+    import_selected_memory.clicked.connect(
+        lambda: _submit(
+            runtime,
+            runtime.presenter.import_selected_device_memory(
+                [str(item) for item in _selected_table_ids(memory_preview)],
+                value_source=memory_value_source.currentData(),
+            ),
+        )
+    )
+    import_all_memory.clicked.connect(
+        lambda: _submit(
+            runtime,
+            runtime.presenter.import_all_device_memory(value_source=memory_value_source.currentData()),
+        )
+    )
+    import_all_and_clear.clicked.connect(
+        lambda: (
+            _submit(
+                runtime,
+                runtime.presenter.import_all_device_memory(
+                    value_source=memory_value_source.currentData(),
+                    clear_after_import=True,
+                ),
+            )
+            if _confirm(window, "Import And Clear Device Memory", "Import all browsed device-memory sessions, then clear the meter?")
+            else None
+        )
+    )
+    clear_device_memory.clicked.connect(
+        lambda: (
+            _submit(runtime, runtime.presenter.clear_device_memory())
+            if _confirm(window, "Clear Device Memory", "Erase saved sessions from the connected meter?")
+            else None
+        )
+    )
+    memory_value_source.currentIndexChanged.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.set_device_memory_value_source(memory_value_source.currentData()))
+    )
     recent.itemSelectionChanged.connect(on_selection_changed)
+    memory_preview.itemSelectionChanged.connect(on_memory_selection_changed)
     context_filter.currentIndexChanged.connect(on_context_changed)
+    replay_channel_filter.currentIndexChanged.connect(on_replay_channel_changed)
     axis_filter.currentIndexChanged.connect(on_axis_changed)
     segment_filter.currentIndexChanged.connect(on_segment_changed)
     compare_filter.currentIndexChanged.connect(on_compare_changed)
@@ -1127,6 +1329,31 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     header.setObjectName("section_header")
     session_list_column.addWidget(header)
     session_list_column.addWidget(recent)
+    memory_panel = QWidget()
+    memory_panel_layout = QVBoxLayout(memory_panel)
+    memory_panel_layout.setContentsMargins(0, 0, 0, 0)
+    memory_header = QLabel("Device Memory Panel")
+    memory_header.setObjectName("section_header")
+    memory_panel_layout.addWidget(memory_header)
+    memory_panel_layout.addWidget(memory_status)
+    memory_panel_layout.addWidget(memory_capacity)
+    memory_panel_layout.addWidget(memory_summary)
+    memory_value_row = QHBoxLayout()
+    memory_value_row.addWidget(QLabel("Import Source"))
+    memory_value_row.addWidget(memory_value_source, 1)
+    memory_panel_layout.addLayout(memory_value_row)
+    memory_panel_layout.addWidget(memory_preview)
+    memory_button_row_1 = QHBoxLayout()
+    memory_button_row_1.addWidget(refresh_memory_status)
+    memory_button_row_1.addWidget(browse_device_memory)
+    memory_panel_layout.addLayout(memory_button_row_1)
+    memory_button_row_2 = QHBoxLayout()
+    memory_button_row_2.addWidget(import_selected_memory)
+    memory_button_row_2.addWidget(import_all_memory)
+    memory_button_row_2.addWidget(import_all_and_clear)
+    memory_button_row_2.addWidget(clear_device_memory)
+    memory_panel_layout.addLayout(memory_button_row_2)
+    session_list_column.addWidget(memory_panel)
 
     detail_column = QVBoxLayout()
     for widget in (active, count, summary, compare_summary, database, export_status):
@@ -1137,6 +1364,12 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     context_row.addWidget(context_label)
     context_row.addWidget(context_filter, 1)
     detail_column.addLayout(context_row)
+    replay_channel_row = QHBoxLayout()
+    replay_channel_label = QLabel("Replay Channel")
+    replay_channel_label.setObjectName("section_header")
+    replay_channel_row.addWidget(replay_channel_label)
+    replay_channel_row.addWidget(replay_channel_filter, 1)
+    detail_column.addLayout(replay_channel_row)
     axis_row = QHBoxLayout()
     axis_label = QLabel("Axis Mode")
     axis_label.setObjectName("section_header")
@@ -1186,9 +1419,22 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
             "context_filter": context_filter, "context_label": context_label,
+            "replay_channel_filter": replay_channel_filter, "replay_channel_label": replay_channel_label,
             "axis_filter": axis_filter, "axis_label": axis_label,
             "segment_filter": segment_filter, "segment_label": segment_label,
             "compare_filter": compare_filter, "compare_label": compare_label,
+            "memory_panel": memory_panel,
+            "memory_status": memory_status,
+            "memory_capacity": memory_capacity,
+            "memory_summary": memory_summary,
+            "memory_value_source": memory_value_source,
+            "memory_preview": memory_preview,
+            "refresh_memory_status": refresh_memory_status,
+            "browse_device_memory": browse_device_memory,
+            "import_selected_memory": import_selected_memory,
+            "import_all_memory": import_all_memory,
+            "import_all_and_clear": import_all_and_clear,
+            "clear_device_memory": clear_device_memory,
             "export_csv": export_csv, "export_json": export_json,
             "export_analysis": export_analysis, "export_segments": export_segments,
             "export_chart": export_chart, "chart": chart,
@@ -1203,13 +1449,44 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
     database.setWordWrap(True)
     diagnostics = QLabel()
     diagnostics.setWordWrap(True)
+    device_info = QLabel()
+    device_info.setWordWrap(True)
+    family_info = QLabel()
+    family_info.setWordWrap(True)
+    profile_info = QLabel()
+    profile_info.setWordWrap(True)
+    capabilities_info = QLabel()
+    capabilities_info.setWordWrap(True)
+    services_info = QLabel()
+    services_info.setWordWrap(True)
+    live_buffer = QLabel()
+    live_buffer.setWordWrap(True)
+    fixture_status = QLabel()
+    fixture_status.setWordWrap(True)
     export_dir_input = QLineEdit()
     export_dir_input.setToolTip("Set the default directory for exports")
     apply_button = QPushButton("Apply Export Directory")
     apply_button.setToolTip("Save the export directory setting")
+    fixture_frame_count = QSpinBox()
+    fixture_frame_count.setRange(1, 5000)
+    fixture_frame_count.setValue(200)
+    fixture_frame_count.setToolTip("How many recent raw BLE notifications to include in the exported fixture")
+    export_fixture_button = QPushButton("Export Raw Fixture")
+    export_fixture_button.setToolTip("Export recent raw BLE notifications and parsed readings for device bring-up work")
 
     apply_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: runtime.presenter.set_export_directory(export_dir_input.text()))
+    )
+    export_fixture_button.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_raw_fixture_capture(
+                _session_export_path(runtime, "fixture.json"),
+                max_frames=fixture_frame_count.value(),
+            ),
+            "Raw Fixture",
+        )
     )
 
     theme_combo = QComboBox()
@@ -1246,9 +1523,28 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
 
     theme_form = QFormLayout()
     theme_form.addRow("Theme", theme_combo)
+    fixture_form = QFormLayout()
+    fixture_form.addRow("Fixture Frames", fixture_frame_count)
 
-    for widget in (database, diagnostics, export_dir_input, apply_button):
+    device_header = QLabel("Device Info")
+    device_header.setObjectName("section_header")
+    diagnostics_header = QLabel("Diagnostics")
+    diagnostics_header.setObjectName("section_header")
+    fixture_header = QLabel("Fixture Capture")
+    fixture_header.setObjectName("section_header")
+
+    for widget in (database, export_dir_input, apply_button):
         layout.addWidget(widget)
+    layout.addWidget(device_header)
+    for widget in (device_info, family_info, profile_info, capabilities_info, services_info):
+        layout.addWidget(widget)
+    layout.addWidget(diagnostics_header)
+    for widget in (diagnostics, live_buffer):
+        layout.addWidget(widget)
+    layout.addWidget(fixture_header)
+    layout.addLayout(fixture_form)
+    layout.addWidget(export_fixture_button)
+    layout.addWidget(fixture_status)
     layout.addLayout(theme_form)
     layout.addStretch()
 
@@ -1256,7 +1552,11 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
         panel=panel,
         refs={
             "database": database, "diagnostics": diagnostics,
+            "device_info": device_info, "family_info": family_info, "profile_info": profile_info,
+            "capabilities_info": capabilities_info, "services_info": services_info,
+            "live_buffer": live_buffer, "fixture_status": fixture_status,
             "export_dir_input": export_dir_input, "theme_combo": theme_combo,
+            "fixture_frame_count": fixture_frame_count, "export_fixture_button": export_fixture_button,
         },
     )
 
@@ -1489,6 +1789,26 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["unit"].setText(live.unit_text)
     panel.refs["measurement"].setText(live.measurement_label)
     panel.refs["status"].setText(f"Status: {live.status_text}")
+    panel.refs["primary_reading"].setText(
+        f"{live.live_primary_label}: {live.live_primary_reading} {live.live_primary_unit_text}".strip()
+        if live.live_primary_reading != "--" or live.live_primary_unit_text
+        else ""
+    )
+    panel.refs["secondary_reading"].setText(
+        f"{live.live_secondary_label}: {live.live_secondary_reading} {live.live_secondary_unit_text}".strip()
+        if live.live_secondary_reading != "--" or live.live_secondary_unit_text
+        else ""
+    )
+    panel.refs["family_badges"].setText(
+        "" if not live.family_mode_badges else f"Family Modes: {', '.join(live.family_mode_badges)}"
+    )
+    panel.refs["capability_summary"].setText(
+        "" if not live.capability_summary_text else f"Capabilities: {live.capability_summary_text}"
+    )
+    panel.refs["primary_reading"].setVisible(bool(panel.refs["primary_reading"].text()))
+    panel.refs["secondary_reading"].setVisible(bool(panel.refs["secondary_reading"].text()))
+    panel.refs["family_badges"].setVisible(bool(panel.refs["family_badges"].text()))
+    panel.refs["capability_summary"].setVisible(bool(panel.refs["capability_summary"].text()))
     panel.refs["connection"].setText(f"Connection: {live.connection_text}")
     _update_connection_dot(panel.refs["connection_dot"], live.connection_health)
     chart_notice = panel.refs["chart_notice"]
@@ -1499,6 +1819,7 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     panel.refs["summary"].setText(live.summary_text)
     panel.refs["marker_count"].setText(live.marker_count_text)
     panel.refs["alert_status"].setText(live.alert_status_text)
+    panel.refs["logging_status"].setText(live.logging_status_text)
     chart_mode = panel.refs["chart_mode"]
     current_chart_index = chart_mode.findData(live.selected_chart_mode)
     if current_chart_index >= 0 and chart_mode.currentIndex() != current_chart_index:
@@ -1507,12 +1828,45 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
             chart_mode.setCurrentIndex(current_chart_index)
         finally:
             chart_mode.blockSignals(False)
+    live_channel = panel.refs["live_channel"]
+    current_channel_index = live_channel.findData(live.selected_live_channel)
+    if current_channel_index >= 0 and live_channel.currentIndex() != current_channel_index:
+        live_channel.blockSignals(True)
+        try:
+            live_channel.setCurrentIndex(current_channel_index)
+        finally:
+            live_channel.blockSignals(False)
     panel.refs["start_button"].setEnabled(live.is_connected and not live.is_logging)
     panel.refs["stop_button"].setEnabled(live.is_logging)
     panel.refs["add_marker_button"].setEnabled(live.is_logging)
     panel.refs["marker_input"].setEnabled(live.is_logging)
     panel.refs["export_chart_button"].setEnabled(bool(live.chart_points))
     panel.refs["disconnect_button"].setEnabled(live.is_connected)
+    logging_enabled = "device_logging_config" in set(live.available_capabilities)
+    panel.refs["logging_header"].setVisible(logging_enabled)
+    panel.refs["logging_status"].setVisible(logging_enabled)
+    panel.refs["read_logging_button"].setEnabled(live.is_connected and not live.is_logging and logging_enabled)
+    panel.refs["apply_logging_button"].setEnabled(live.is_connected and not live.is_logging and logging_enabled)
+    logging_interval_input = panel.refs["logging_interval_input"]
+    if not logging_interval_input.hasFocus() and logging_interval_input.text() != live.logging_interval_seconds_text:
+        logging_interval_input.setText(live.logging_interval_seconds_text)
+    logging_duration_input = panel.refs["logging_duration_input"]
+    if not logging_duration_input.hasFocus() and logging_duration_input.text() != live.logging_duration_seconds_text:
+        logging_duration_input.setText(live.logging_duration_seconds_text)
+    logging_manual_checkbox = panel.refs["logging_manual_checkbox"]
+    if logging_manual_checkbox.isChecked() != live.logging_manual_stop:
+        logging_manual_checkbox.blockSignals(True)
+        try:
+            logging_manual_checkbox.setChecked(live.logging_manual_stop)
+        finally:
+            logging_manual_checkbox.blockSignals(False)
+    logging_duration_input.setEnabled(logging_enabled and not live.logging_manual_stop)
+    panel.refs["logging_interval_input"].setEnabled(logging_enabled)
+    panel.refs["logging_manual_checkbox"].setEnabled(logging_enabled)
+    family_enabled = "live_primary_secondary" in set(live.available_capabilities)
+    panel.refs["live_channel"].setVisible(family_enabled)
+    panel.refs["family_panel"].setVisible(family_enabled)
+    panel.refs["logging_panel"].setVisible(logging_enabled)
     alert_banner = panel.refs["alert_banner"]
     alert_banner.setText(live.alert_message)
     alert_banner.setVisible(live.alert_active)
@@ -1541,10 +1895,33 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     panel.refs["compare_summary"].setVisible(bool(session.compare_summary_text))
     panel.refs["database"].setText(f"Database: {session.database_path_text}")
     panel.refs["export_status"].setText(session.export_status_text)
+    panel.refs["memory_status"].setText(session.device_memory_status_text)
+    panel.refs["memory_capacity"].setText(session.device_memory_capacity_text)
+    panel.refs["memory_capacity"].setVisible(bool(session.device_memory_capacity_text))
+    panel.refs["memory_summary"].setText(session.device_memory_summary_text)
+    panel.refs["memory_summary"].setVisible(bool(session.device_memory_summary_text))
 
     _sync_table_rows(
         panel.refs["recent"],
         [(e.session_id, [e.title, e.started_at_text, e.ended_at_text]) for e in session.recent_sessions],
+    )
+    _sync_table_rows(
+        panel.refs["memory_preview"],
+        [
+            (
+                item.preview_id,
+                [
+                    item.title,
+                    item.started_at_text,
+                    item.ended_at_text,
+                    item.measurement_text,
+                    item.interval_text,
+                    item.detail_count_text,
+                    item.import_status_text,
+                ],
+            )
+            for item in session.device_memory_sessions
+        ],
     )
     if session.selected_session_id is not None:
         recent = panel.refs["recent"]
@@ -1578,6 +1955,19 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         session.selected_context_id,
     )
     _sync_combo_rows(
+        panel.refs["replay_channel_filter"],
+        [(channel, channel.title()) for channel in session.available_replay_channels],
+        session.selected_replay_channel if session.available_replay_channels else None,
+    )
+    memory_value_source = panel.refs["memory_value_source"]
+    memory_value_index = memory_value_source.findData(session.device_memory_value_source)
+    if memory_value_index >= 0 and memory_value_source.currentIndex() != memory_value_index:
+        memory_value_source.blockSignals(True)
+        try:
+            memory_value_source.setCurrentIndex(memory_value_index)
+        finally:
+            memory_value_source.blockSignals(False)
+    _sync_combo_rows(
         panel.refs["axis_filter"],
         [("elapsed", "Elapsed Time"), ("utc", "UTC Timestamp"), ("by_segment", "By Segment")],
         session.selected_axis_mode,
@@ -1593,10 +1983,13 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         session.compare_session_id,
     )
     show_context_filter = bool(session.available_contexts)
+    show_replay_channel = len(session.available_replay_channels) > 1
     show_segment_filter = session.selected_axis_mode == "by_segment" and bool(session.available_segments)
     show_compare_filter = bool(session.available_compare_sessions)
     panel.refs["context_filter"].setVisible(show_context_filter)
     panel.refs["context_label"].setVisible(show_context_filter)
+    panel.refs["replay_channel_filter"].setVisible(show_replay_channel)
+    panel.refs["replay_channel_label"].setVisible(show_replay_channel)
     panel.refs["axis_filter"].setVisible(True)
     panel.refs["axis_label"].setVisible(True)
     panel.refs["segment_filter"].setVisible(show_segment_filter)
@@ -1609,6 +2002,21 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
     panel.refs["export_analysis"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_segments"].setEnabled(session.selected_session_id is not None)
     panel.refs["export_chart"].setEnabled(bool(session.chart_points))
+    live = runtime.presenter.live_view_model()
+    memory_enabled = live.is_connected and not live.is_logging and "device_memory_download" in set(live.available_capabilities)
+    clear_enabled = live.is_connected and not live.is_logging and "device_memory_clear" in set(live.available_capabilities)
+    has_preview_rows = bool(session.device_memory_sessions)
+    has_selected_preview_rows = bool(_selected_table_ids(panel.refs["memory_preview"]))
+    panel.refs["memory_panel"].setVisible(
+        "device_memory_download" in set(live.available_capabilities) or "device_memory_clear" in set(live.available_capabilities)
+    )
+    panel.refs["refresh_memory_status"].setEnabled(memory_enabled)
+    panel.refs["browse_device_memory"].setEnabled(memory_enabled)
+    panel.refs["memory_value_source"].setEnabled(memory_enabled)
+    panel.refs["import_selected_memory"].setEnabled(memory_enabled and has_preview_rows and has_selected_preview_rows)
+    panel.refs["import_all_memory"].setEnabled(memory_enabled and has_preview_rows)
+    panel.refs["import_all_and_clear"].setEnabled(memory_enabled and clear_enabled and has_preview_rows)
+    panel.refs["clear_device_memory"].setEnabled(clear_enabled)
     panel.refs["chart"].set_data(
         session.chart_points, session.marker_points,
         unit_text=session.selected_unit_text,
@@ -1623,10 +2031,22 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
 def _refresh_settings(runtime, panel: _PanelRefs) -> None:
     settings = runtime.presenter.settings_view_model()
     panel.refs["database"].setText(f"Database: {settings.database_path_text}")
+    panel.refs["device_info"].setText(f"Device: {settings.active_device_text}")
+    panel.refs["family_info"].setText(settings.active_family_text)
+    panel.refs["profile_info"].setText(settings.active_profile_text)
+    panel.refs["capabilities_info"].setText(
+        "" if not settings.active_capabilities_text else f"Capabilities: {settings.active_capabilities_text}"
+    )
+    panel.refs["services_info"].setText(
+        "" if not settings.active_services_text else f"Services: {settings.active_services_text}"
+    )
     panel.refs["diagnostics"].setText(settings.diagnostics_text)
+    panel.refs["live_buffer"].setText(settings.live_buffer_text)
+    panel.refs["fixture_status"].setText(settings.fixture_status_text)
     export_dir_input = panel.refs["export_dir_input"]
     if export_dir_input.text() != settings.export_directory_text:
         export_dir_input.setText(settings.export_directory_text)
+    panel.refs["export_fixture_button"].setEnabled(bool(settings.active_device_text and settings.active_device_text != "No device connected"))
 
 
 def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
@@ -1733,6 +2153,39 @@ def _add_live_marker(runtime, marker_input) -> None:
         raise RuntimeError("Enter a marker note before adding a marker.")
     runtime.presenter.add_marker(note)
     marker_input.clear()
+
+
+def _apply_logging_settings(runtime, interval_input, duration_input, manual_checkbox) -> None:
+    interval_text = interval_input.text().strip()
+    if not interval_text:
+        raise RuntimeError("Enter a logging interval in seconds.")
+    try:
+        interval_seconds = int(interval_text)
+    except ValueError as exc:
+        raise RuntimeError("Logging interval must be an integer number of seconds.") from exc
+    if interval_seconds < 0:
+        raise RuntimeError("Logging interval must be non-negative.")
+
+    if manual_checkbox.isChecked():
+        duration_seconds = 0
+    else:
+        duration_text = duration_input.text().strip()
+        if not duration_text:
+            raise RuntimeError("Enter a finite logging duration in seconds or enable Manual stop.")
+        try:
+            duration_seconds = int(duration_text)
+        except ValueError as exc:
+            raise RuntimeError("Logging duration must be an integer number of seconds.") from exc
+        if duration_seconds < 0:
+            raise RuntimeError("Logging duration must be non-negative.")
+
+    _submit(
+        runtime,
+        runtime.presenter.apply_device_logging_config(
+            interval_seconds=interval_seconds,
+            duration_seconds=duration_seconds,
+        ),
+    )
 
 
 def _toggle_logging(runtime, live_panel: _PanelRefs) -> None:

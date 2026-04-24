@@ -56,17 +56,20 @@ class ExportService:
             _analysis_column_name(group["context_id"], group["display_unit"])
             for group in groups
         ]
-        rows: list[dict[str, str | float | None]] = []
+        rows_by_key: dict[tuple[str, str], dict[str, str | float | None]] = {}
         for group in groups:
             column = _analysis_column_name(group["context_id"], group["display_unit"])
             for reading in group["readings"]:
-                row: dict[str, str | float | None] = {
-                    "timestamp_utc": reading.timestamp_utc.isoformat(),
-                }
-                for header in headers[1:]:
-                    row[header] = None
+                sample_group_id = str(reading.metadata.get("sample_group_id") or "")
+                row = rows_by_key.setdefault(
+                    (reading.timestamp_utc.isoformat(), sample_group_id),
+                    {
+                        "timestamp_utc": reading.timestamp_utc.isoformat(),
+                        **{header: None for header in headers[1:]},
+                    },
+                )
                 row[column] = reading.value
-                rows.append(row)
+        rows = list(rows_by_key.values())
         rows.sort(
             key=lambda row: (
                 str(row["timestamp_utc"]),
@@ -141,6 +144,10 @@ class SessionCsvExporter:
                 fieldnames=[
                     "session_id",
                     "timestamp_utc",
+                    "sample_group_id",
+                    "channel_role",
+                    "family_id",
+                    "variant_id",
                     "value",
                     "unit",
                     "measurement_type",
@@ -149,6 +156,7 @@ class SessionCsvExporter:
                     "source_device_id",
                     "mode",
                     "raw_payload_hex",
+                    "metadata_json",
                 ],
             )
             writer.writeheader()
@@ -157,6 +165,10 @@ class SessionCsvExporter:
                     {
                         "session_id": session.session_id,
                         "timestamp_utc": reading.timestamp_utc.isoformat(),
+                        "sample_group_id": str(reading.metadata.get("sample_group_id") or ""),
+                        "channel_role": str(reading.metadata.get("channel_role") or "primary"),
+                        "family_id": str(reading.metadata.get("family_id") or ""),
+                        "variant_id": str(reading.metadata.get("variant_id") or ""),
                         "value": "" if reading.value is None else repr(reading.value),
                         "unit": reading.unit,
                         "measurement_type": reading.measurement_type.value,
@@ -165,6 +177,7 @@ class SessionCsvExporter:
                         "source_device_id": reading.source_device_id or session.device_id,
                         "mode": reading.mode,
                         "raw_payload_hex": "" if reading.raw_payload is None else reading.raw_payload.hex(),
+                        "metadata_json": json.dumps(reading.metadata, sort_keys=True),
                     }
                 )
         return path
@@ -212,6 +225,8 @@ class SessionJsonExporter:
                 "ble_address": device.ble_address,
                 "model_name": device.model_name,
                 "profile_id": device.profile_id,
+                "family_id": getattr(device, "family_id", ""),
+                "variant_id": getattr(device, "variant_id", ""),
                 "nickname": device.nickname,
                 "firmware_version": device.firmware_version,
                 "serial_number": device.serial_number,
@@ -219,6 +234,13 @@ class SessionJsonExporter:
                 "rssi": device.rssi,
                 "metadata": dict(device.metadata),
             },
+            "available_channels": sorted(
+                {
+                    str(reading.metadata.get("channel_role") or "primary")
+                    for reading in readings
+                    if str(reading.metadata.get("channel_role") or "primary") in {"primary", "secondary"}
+                }
+            ),
             "readings": [
                 {
                     "timestamp_utc": reading.timestamp_utc.isoformat(),
@@ -386,60 +408,77 @@ def _segment_payload(segment: dict[str, object], markers: list[SessionMarker]) -
 def _context_descriptor(reading: Reading) -> tuple[str, str, str | None, bool]:
     measurement_type = reading.measurement_type
     unit_family = str(reading.metadata.get("unit_family") or "").strip().lower()
+    channel_role = str(reading.metadata.get("channel_role") or "primary").strip().lower()
+    multi_channel = any(f"mode_attr_{index}" in reading.metadata for index in range(1, 6))
 
     if measurement_type.value == "voltage_ac":
-        return "voltage_ac", "Voltage AC", "voltage", False
+        return _channel_aware_context("voltage_ac", "Voltage AC", "voltage", channel_role, multi_channel)
     if measurement_type.value == "voltage_dc":
-        return "voltage_dc", "Voltage DC", "voltage", False
+        return _channel_aware_context("voltage_dc", "Voltage DC", "voltage", channel_role, multi_channel)
     if measurement_type.value == "current_ac":
-        return "current_ac", "Current AC", "current", False
+        return _channel_aware_context("current_ac", "Current AC", "current", channel_role, multi_channel)
     if measurement_type.value == "current_dc":
-        return "current_dc", "Current DC", "current", False
+        return _channel_aware_context("current_dc", "Current DC", "current", channel_role, multi_channel)
     if measurement_type.value == "current_ac_dc":
-        return "current_acdc", "Current AC+DC", "current", False
+        return _channel_aware_context("current_acdc", "Current AC+DC", "current", channel_role, multi_channel)
     if measurement_type.value == "current_inrush":
-        return "current_inrush", "Current Inrush", "current", False
+        return _channel_aware_context("current_inrush", "Current Inrush", "current", channel_role, multi_channel)
     if measurement_type.value == "resistance":
-        return "resistance", "Resistance", "resistance", False
+        return _channel_aware_context("resistance", "Resistance", "resistance", channel_role, multi_channel)
     if measurement_type.value == "capacitance":
-        return "capacitance", "Capacitance", "capacitance", False
+        return _channel_aware_context("capacitance", "Capacitance", "capacitance", channel_role, multi_channel)
     if measurement_type.value == "frequency":
-        return "frequency", "Frequency", "frequency", False
+        return _channel_aware_context("frequency", "Frequency", "frequency", channel_role, multi_channel)
     if measurement_type.value == "duty_cycle":
-        return "duty_cycle", "Duty Cycle", None, False
+        return _channel_aware_context("duty_cycle", "Duty Cycle", None, channel_role, multi_channel)
     if measurement_type.value == "temperature":
         context_id = f"temperature:{reading.unit or 'unknown'}"
-        return context_id, f"Temperature {reading.unit}".strip(), None, False
+        return _channel_aware_context(context_id, f"Temperature {reading.unit}".strip(), None, channel_role, multi_channel)
     if measurement_type.value == "continuity":
-        return "continuity", "Continuity", None, False
+        return _channel_aware_context("continuity", "Continuity", None, channel_role, multi_channel)
 
     if unit_family == "voltage":
         if reading.mode == "ac":
-            return "voltage_ac", "Voltage AC", "voltage", False
+            return _channel_aware_context("voltage_ac", "Voltage AC", "voltage", channel_role, multi_channel)
         if reading.mode == "dc" or reading.unit == "mV":
-            return "voltage_dc", "Voltage DC", "voltage", False
-        return "voltage", "Voltage", "voltage", False
+            return _channel_aware_context("voltage_dc", "Voltage DC", "voltage", channel_role, multi_channel)
+        return _channel_aware_context("voltage", "Voltage", "voltage", channel_role, multi_channel)
     if unit_family == "current":
         if reading.mode == "ac":
-            return "current_ac", "Current AC", "current", False
+            return _channel_aware_context("current_ac", "Current AC", "current", channel_role, multi_channel)
         if reading.mode == "dc":
-            return "current_dc", "Current DC", "current", False
+            return _channel_aware_context("current_dc", "Current DC", "current", channel_role, multi_channel)
         if reading.mode == "acdc":
-            return "current_acdc", "Current AC+DC", "current", False
-        return "current", "Current", "current", False
+            return _channel_aware_context("current_acdc", "Current AC+DC", "current", channel_role, multi_channel)
+        return _channel_aware_context("current", "Current", "current", channel_role, multi_channel)
     if unit_family == "resistance":
-        return "resistance", "Resistance", "resistance", False
+        return _channel_aware_context("resistance", "Resistance", "resistance", channel_role, multi_channel)
     if unit_family == "capacitance":
-        return "capacitance", "Capacitance", "capacitance", False
+        return _channel_aware_context("capacitance", "Capacitance", "capacitance", channel_role, multi_channel)
     if unit_family == "frequency":
-        return "frequency", "Frequency", "frequency", False
+        return _channel_aware_context("frequency", "Frequency", "frequency", channel_role, multi_channel)
     if unit_family == "duty_cycle":
-        return "duty_cycle", "Duty Cycle", None, False
+        return _channel_aware_context("duty_cycle", "Duty Cycle", None, channel_role, multi_channel)
     if unit_family == "temperature":
         context_id = f"temperature:{reading.unit or 'unknown'}"
-        return context_id, f"Temperature {reading.unit}".strip(), None, False
+        return _channel_aware_context(context_id, f"Temperature {reading.unit}".strip(), None, channel_role, multi_channel)
 
-    return "unknown", "Unknown / Transitional", None, True
+    return _channel_aware_context("unknown", "Unknown / Transitional", None, channel_role, multi_channel, is_unknown=True)
+
+
+def _channel_aware_context(
+    context_id: str,
+    label: str,
+    normalization_key: str | None,
+    channel_role: str,
+    multi_channel: bool,
+    *,
+    is_unknown: bool = False,
+) -> tuple[str, str, str | None, bool]:
+    if not multi_channel:
+        return context_id, label, normalization_key, is_unknown
+    prefix = "secondary" if channel_role == "secondary" else "primary"
+    return f"{prefix}_{context_id}", f"{prefix.title()} {label}", normalization_key, is_unknown
 
 
 def _normalize_group(readings: list[Reading], normalization_key: str | None) -> list[Reading]:

@@ -6,6 +6,7 @@ from enum import Enum
 class MeasurementType(str, Enum):
     VOLTAGE_AC = "voltage_ac"
     VOLTAGE_DC = "voltage_dc"
+    VOLTAGE_AC_DC = "voltage_ac_dc"
     CURRENT_AC = "current_ac"
     CURRENT_DC = "current_dc"
     CURRENT_AC_DC = "current_ac_dc"
@@ -16,6 +17,12 @@ class MeasurementType(str, Enum):
     FREQUENCY = "frequency"
     DUTY_CYCLE = "duty_cycle"
     TEMPERATURE = "temperature"
+    PRESSURE = "pressure"
+    CONDUCTANCE = "conductance"
+    LOW_PASS_VFD = "low_pass_vfd"
+    FIELDSENSE = "fieldsense"
+    PHASE_ROTATION = "phase_rotation"
+    UNKNOWN_FAMILY_MODE = "unknown_family_mode"
     UNKNOWN = "unknown"
 
 

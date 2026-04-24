@@ -31,20 +31,38 @@ class FakeBleAdapter(BleAdapter):
         self,
         devices: list[BleDevice] | None = None,
         services_by_device: dict[str, list[FakeBleService]] | None = None,
+        scan_batches: list[list[BleDevice]] | None = None,
     ) -> None:
         self._devices = devices or []
+        self._scan_batches = list(scan_batches or [])
         self._services_by_device = services_by_device or {}
         self._connected: set[str] = set()
         self._subscriptions: dict[tuple[str, str], _Subscription] = {}
         self._disconnect_callbacks: dict[str, BleDisconnectCallback] = {}
+        self.connect_failures_remaining: dict[str, int] = {}
+        self.subscribe_failures_remaining: dict[tuple[str, str], int] = {}
         self.read_log: list[tuple[str, str]] = []
-        self.write_log: list[tuple[str, str, bytes]] = []
+        self.write_log: list[tuple[str, str, bytes, bool | None]] = []
 
     async def scan(self, timeout_s: float = 5.0) -> list[BleDevice]:
         del timeout_s
+        if self._scan_batches:
+            batch = self._scan_batches.pop(0)
+            return list(batch)
         return list(self._devices)
 
-    async def connect(self, device_id: str) -> None:
+    async def connect(
+        self,
+        device_id: str,
+        *,
+        ble_address: str | None = None,
+        timeout_s: float | None = None,
+    ) -> None:
+        del ble_address, timeout_s
+        remaining = self.connect_failures_remaining.get(device_id, 0)
+        if remaining > 0:
+            self.connect_failures_remaining[device_id] = remaining - 1
+            raise RuntimeError(f"Simulated connect failure for {device_id}")
         self._connected.add(device_id)
 
     async def disconnect(self, device_id: str) -> None:
@@ -61,7 +79,12 @@ class FakeBleAdapter(BleAdapter):
         callback: BleNotificationCallback,
     ) -> None:
         self._require_connected(device_id)
-        self._subscriptions[(device_id, characteristic_uuid.lower())] = _Subscription(callback)
+        key = (device_id, characteristic_uuid.lower())
+        remaining = self.subscribe_failures_remaining.get(key, 0)
+        if remaining > 0:
+            self.subscribe_failures_remaining[key] = remaining - 1
+            raise RuntimeError(f"Simulated subscribe failure for {device_id} {characteristic_uuid}")
+        self._subscriptions[key] = _Subscription(callback)
 
     async def unsubscribe(self, device_id: str, characteristic_uuid: str) -> None:
         self._subscriptions.pop((device_id, characteristic_uuid.lower()), None)
@@ -71,9 +94,15 @@ class FakeBleAdapter(BleAdapter):
         self.read_log.append((device_id, characteristic_uuid))
         return b""
 
-    async def write(self, device_id: str, characteristic_uuid: str, data: bytes) -> None:
+    async def write(
+        self,
+        device_id: str,
+        characteristic_uuid: str,
+        data: bytes,
+        response: bool | None = None,
+    ) -> None:
         self._require_connected(device_id)
-        self.write_log.append((device_id, characteristic_uuid, bytes(data)))
+        self.write_log.append((device_id, characteristic_uuid, bytes(data), response))
 
     async def services(self, device_id: str) -> list[BleServiceInfo]:
         self._require_connected(device_id)

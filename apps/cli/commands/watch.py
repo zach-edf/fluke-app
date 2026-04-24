@@ -10,7 +10,7 @@ import argparse
 import asyncio
 import sys
 
-from apps.cli.runtime import build_device_manager
+from apps.cli.runtime import attach_connection_diagnostics, build_device_manager
 from fluke_core.models.reading import Reading
 
 
@@ -44,8 +44,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
 async def handle(args: argparse.Namespace) -> int:
     manager = build_device_manager()
+    attach_connection_diagnostics(manager)
     samples = 0
     finished = asyncio.Event()
+    terminal_error: str | None = None
 
     def on_reading(reading: Reading) -> None:
         nonlocal samples
@@ -69,21 +71,34 @@ async def handle(args: argparse.Namespace) -> int:
         sys.stdout.flush()
 
     manager.subscribe_readings(on_reading)
+    manager.subscribe_disconnects(lambda: _mark_finished(manager, finished, lambda message: _set_terminal_error(message)))
+
+    def _set_terminal_error(message: str) -> None:
+        nonlocal terminal_error
+        terminal_error = message
 
     print(f"Connecting to {args.device}...", file=sys.stderr)
-    await manager.connect(args.device, profile_id=args.profile)
+    await manager.establish_session(args.device, profile_id=args.profile)
     print(f"\033[2KWatching {args.device}. Press Ctrl+C to stop.\n", file=sys.stderr)
-    await manager.start_stream()
 
     try:
         if args.duration > 0:
-            await asyncio.sleep(args.duration)
+            await asyncio.wait_for(finished.wait(), timeout=args.duration)
         else:
-            await asyncio.Future()
+            await finished.wait()
     except asyncio.TimeoutError:
         pass
     finally:
         sys.stdout.write("\n")
         await manager.disconnect()
 
+    if terminal_error:
+        print(f"Watch ended because recovery failed: {terminal_error}", file=sys.stderr)
+        return 1
     return 0
+
+
+def _mark_finished(manager, finished: asyncio.Event, set_message) -> None:
+    status = manager.latest_connection_diagnostics()
+    set_message("" if status is None else (status.last_error_text or status.message))
+    finished.set()
