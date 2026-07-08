@@ -56,6 +56,7 @@ What exists now:
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow run history can be reviewed and exported as reports from the desktop UI
+  - optional asset tracking: attach sessions to equipment and trend a piece of gear's min/max/avg/median readings over time, with trend chart and CSV export
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
@@ -309,7 +310,15 @@ fluke workflow list
 fluke workflow run --workflow battery_pack_check_v1 --device "<DEVICE_ID>" --profile fluke_376fc
 ```
 
-### 6. Structured output
+### 6. Track equipment and trend readings
+
+```bash
+fluke assets create --name "Line 3 Motor" --type motor --location "Bay 2"
+fluke log --device "<DEVICE_ID>" --asset "<ASSET_ID>" --duration 30
+fluke assets trend --asset "<ASSET_ID>" --measurement current_inrush
+```
+
+### 7. Structured output
 
 The `--json` flag is global, so place it before the subcommand:
 
@@ -320,7 +329,7 @@ fluke --json sessions list
 fluke --json workflow list
 ```
 
-### 7. Plugins and diagnostics
+### 8. Plugins and diagnostics
 
 ```bash
 fluke plugins list
@@ -348,6 +357,7 @@ The desktop app currently includes:
 - Live Reading
 - Session
 - Workflows
+- Assets
 - Settings
 
 ### Live Reading
@@ -423,6 +433,17 @@ Built-in workflow pack:
 - Solar Panel Test
 - Charger Output Check
 - Continuity Checklist
+
+### Assets
+
+The Assets tab supports maintenance-style equipment tracking:
+
+- create / edit / delete tracked assets (name, type, location, notes)
+- attach a session to an asset when starting logging (Live Reading tab) or retroactively (Session tab)
+- per-asset trend chart (x = session date, y = chosen stat) with a measurement selector and min / max / avg / median selector
+- trend chart PNG export and per-session trend CSV export
+
+Assets are optional. If you never create one, capture, session, and export behavior are unchanged, and sessions recorded before the feature stay unassigned. See [docs/assets-and-trending.md](docs/assets-and-trending.md).
 
 ## Workflows
 
@@ -518,6 +539,15 @@ These are meant to lower the barrier for remote debugging when hardware is unava
 - device id
 - start / end time
 - profile id
+- optional asset id
+
+### Asset
+
+- name
+- asset type (free text, suggested categories like motor/panel/HVAC unit/battery/charger)
+- location
+- notes
+- created at
 
 ### Marker
 
@@ -648,6 +678,7 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/getting-started.md](docs/getting-started.md)
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
+- [docs/assets-and-trending.md](docs/assets-and-trending.md)
 - [docs/data-and-exports.md](docs/data-and-exports.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)
 - [docs/workflows-page.md](docs/workflows-page.md)
