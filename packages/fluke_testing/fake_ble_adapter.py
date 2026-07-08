@@ -141,8 +141,16 @@ class FakeBleAdapter(BleAdapter):
         else:
             self._disconnect_callbacks[device_id] = callback
 
+    def script_connect_failures(self, device_id: str, count: int) -> None:
+        """Script the next ``count`` connect attempts for ``device_id`` to fail.
+
+        Useful for driving reconnect backoff: after an unexpected disconnect the
+        DeviceManager will hit these failures before eventually succeeding.
+        """
+        self.connect_failures_remaining[device_id] = max(0, int(count))
+
     async def simulate_unexpected_disconnect(self, device_id: str) -> None:
-        """Simulate the device powering off or going out of range."""
+        """Simulate the device powering off or going out of range mid-stream."""
         self._connected.discard(device_id)
         self._subscriptions = {
             key: sub for key, sub in self._subscriptions.items() if key[0] != device_id
