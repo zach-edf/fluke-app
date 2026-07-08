@@ -18,15 +18,16 @@ class WorkflowRunRepository:
             self._con.execute(
                 """
                 INSERT INTO workflow_runs (
-                    run_id, workflow_id, session_id, started_at, ended_at, result, workflow_title
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    run_id, workflow_id, session_id, started_at, ended_at, result, workflow_title, asset_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     workflow_id=excluded.workflow_id,
                     session_id=excluded.session_id,
                     started_at=excluded.started_at,
                     ended_at=excluded.ended_at,
                     result=excluded.result,
-                    workflow_title=excluded.workflow_title
+                    workflow_title=excluded.workflow_title,
+                    asset_id=excluded.asset_id
                 """,
                 (
                     run.run_id,
@@ -36,6 +37,7 @@ class WorkflowRunRepository:
                     run.ended_at.isoformat() if run.ended_at else None,
                     run.result.value,
                     run.workflow_title,
+                    run.asset_id,
                 ),
             )
             self._con.commit()
@@ -77,6 +79,7 @@ class WorkflowRunRepository:
 
 
 def _run_from_row(row: sqlite3.Row) -> WorkflowRun:
+    keys = row.keys()
     return WorkflowRun(
         run_id=row["run_id"],
         workflow_id=row["workflow_id"],
@@ -85,4 +88,5 @@ def _run_from_row(row: sqlite3.Row) -> WorkflowRun:
         ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
         result=WorkflowRunResult(row["result"]),
         workflow_title=row["workflow_title"],
+        asset_id=row["asset_id"] if "asset_id" in keys else None,
     )

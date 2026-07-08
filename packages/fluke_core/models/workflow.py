@@ -67,6 +67,7 @@ class WorkflowRun:
     ended_at: datetime | None = None
     result: WorkflowRunResult = WorkflowRunResult.IN_PROGRESS
     workflow_title: str | None = None
+    asset_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

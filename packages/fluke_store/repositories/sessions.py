@@ -19,8 +19,8 @@ class SessionRepository:
                 """
                 INSERT INTO sessions (
                     session_id, device_id, started_at, ended_at,
-                    title, notes, tags_json, app_version, profile_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title, notes, tags_json, app_version, profile_id, asset_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     device_id=excluded.device_id,
                     started_at=excluded.started_at,
@@ -29,7 +29,8 @@ class SessionRepository:
                     notes=excluded.notes,
                     tags_json=excluded.tags_json,
                     app_version=excluded.app_version,
-                    profile_id=excluded.profile_id
+                    profile_id=excluded.profile_id,
+                    asset_id=excluded.asset_id
                 """,
                 (
                     session.session_id,
@@ -41,6 +42,7 @@ class SessionRepository:
                     json.dumps(session.tags),
                     session.app_version,
                     session.profile_id,
+                    session.asset_id,
                 ),
             )
             self._con.commit()
@@ -68,8 +70,30 @@ class SessionRepository:
             ).fetchall()
         return [_session_from_row(row) for row in rows]
 
+    def list_for_asset(self, asset_id: str, limit: int = 500) -> list[Session]:
+        with self._lock:
+            rows = self._con.execute(
+                """
+                SELECT * FROM sessions
+                WHERE asset_id = ?
+                ORDER BY started_at ASC
+                LIMIT ?
+                """,
+                (asset_id, limit),
+            ).fetchall()
+        return [_session_from_row(row) for row in rows]
+
+    def assign_asset(self, session_id: str, asset_id: str | None) -> None:
+        with self._lock:
+            self._con.execute(
+                "UPDATE sessions SET asset_id = ? WHERE session_id = ?",
+                (asset_id, session_id),
+            )
+            self._con.commit()
+
 
 def _session_from_row(row: sqlite3.Row) -> Session:
+    keys = row.keys()
     return Session(
         session_id=row["session_id"],
         device_id=row["device_id"],
@@ -80,4 +104,5 @@ def _session_from_row(row: sqlite3.Row) -> Session:
         tags=json.loads(row["tags_json"]) if row["tags_json"] else [],
         app_version=row["app_version"],
         profile_id=row["profile_id"],
+        asset_id=row["asset_id"] if "asset_id" in keys else None,
     )

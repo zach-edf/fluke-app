@@ -89,6 +89,7 @@ def new_session(
     tags: list[str] | None = None,
     app_version: str | None = None,
     profile_id: str | None = None,
+    asset_id: str | None = None,
     started_at: datetime | None = None,
 ) -> Session:
     started = started_at or datetime.now(timezone.utc)
@@ -102,6 +103,7 @@ def new_session(
         tags=list(tags or []),
         app_version=app_version,
         profile_id=profile_id,
+        asset_id=asset_id,
     )
 
 

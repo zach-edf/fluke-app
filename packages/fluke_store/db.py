@@ -10,7 +10,9 @@ from fluke_core.models.device import DeviceInfo
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.reading import Reading
 from fluke_core.models.session import Session
+from fluke_core.models.asset import Asset
 from fluke_core.models.workflow import WorkflowRun, WorkflowStepResult
+from fluke_store.repositories.assets import AssetRepository
 from fluke_store.repositories.devices import DeviceRepository
 from fluke_store.repositories.markers import MarkerRepository
 from fluke_store.repositories.readings import ReadingRepository
@@ -38,6 +40,13 @@ def initialize(con: sqlite3.Connection) -> None:
     _ensure_column(con, "readings", "source_device_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "mode", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    # Asset linkage was added in schema v4. Existing sessions and workflow runs
+    # remain assetless (NULL) until a user attaches them to an asset.
+    _ensure_column(con, "sessions", "asset_id", "TEXT NULL")
+    _ensure_column(con, "workflow_runs", "asset_id", "TEXT NULL")
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_asset_started ON sessions(asset_id, started_at)"
+    )
     con.commit()
 
 
@@ -57,6 +66,7 @@ class FlukeStore:
         self.con = connect(self.path)
         initialize(self.con)
         self._lock = threading.RLock()
+        self.assets = AssetRepository(self.con, lock=self._lock)
         self.devices = DeviceRepository(self.con, lock=self._lock)
         self.markers = MarkerRepository(self.con, lock=self._lock)
         self.sessions = SessionRepository(self.con, lock=self._lock)
@@ -69,6 +79,9 @@ class FlukeStore:
 
     def upsert_device(self, device: DeviceInfo, last_seen_at: datetime | None = None) -> DeviceInfo:
         return self.devices.upsert(device, last_seen_at=last_seen_at)
+
+    def create_asset(self, asset: Asset) -> Asset:
+        return self.assets.create(asset)
 
     def create_session(self, session: Session) -> Session:
         return self.sessions.create(session)
