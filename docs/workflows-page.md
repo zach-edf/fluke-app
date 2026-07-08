@@ -318,6 +318,121 @@ Example:
 }
 ```
 
+## Pass/Fail Acceptance Criteria (schema v2)
+
+Capture steps can declare acceptance criteria so a run produces a professional
+PASS/FAIL verdict instead of just a checklist of captured values. Criteria live
+in an optional `acceptance` object on a capture step. Steps without `acceptance`
+behave exactly as before (their verdict is "not evaluated"). Packs that use
+acceptance criteria should set `"schema_version": 2` at the top level; older
+packs without the field are treated as v1 and still load unchanged.
+
+Each capture step is evaluated when its reading is captured, and the overall run
+verdict is the roll-up: any failing step makes the run FAIL; otherwise if at
+least one step passed the run is PASS; if nothing was evaluated the run is
+"not evaluated". Verdicts are persisted per step (with the failing limit text)
+and per run.
+
+### Acceptance object fields
+
+- `min` / `max`: absolute limits in the step's unit. The reading must be
+  `>= min` and `<= max`.
+- `relative_mode`: a relative check against one or more prior capture steps.
+  Supported modes:
+  - `percent_within` (alias `percent_of_reference`): the reading must be within
+    `percent`% of the referenced step's captured value (two-sided band).
+  - `percent_drop`: the reading must not fall more than `percent`% below the
+    referenced value (one-sided; used for voltage drop under load).
+  - `max_unbalance_percent`: the max deviation from the average of this reading
+    plus the referenced readings must stay within `percent`% (used for
+    three-phase voltage/current unbalance).
+- `reference_step_id`: the prior capture step id for single-reference modes.
+- `reference_step_ids`: a list of prior capture step ids for
+  `max_unbalance_percent`.
+- `percent`: the tolerance/limit percentage for relative modes.
+- `unit`: optional unit shown in limit and verdict text.
+- `description`: optional human-readable note about the limit.
+
+Absolute and relative criteria may be combined on the same step; the step passes
+only if every declared criterion passes. If a relative criterion references a
+step that has no captured numeric value yet, that criterion is reported as
+"not evaluated" rather than failing.
+
+### Validation
+
+The catalog validates every definition on load. A pack fails to load if it has
+duplicate step ids, a capture step whose relative criterion references a step
+that does not appear earlier in the workflow, an unsupported `relative_mode`, a
+relative criterion missing `percent`, `min > max`, or a `schema_version` newer
+than the app supports.
+
+### Example: voltage drop under load
+
+```json
+{
+  "workflow_id": "voltage_drop_under_load_v1",
+  "title": "Voltage Drop Under Load",
+  "schema_version": 2,
+  "steps": [
+    {
+      "id": "measure_no_load_voltage",
+      "title": "Measure No-Load Voltage",
+      "instruction": "With the load OFF, measure and capture the circuit voltage.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": { "min": 100, "max": 264, "unit": "V" }
+    },
+    {
+      "id": "measure_loaded_voltage",
+      "title": "Measure Loaded Voltage",
+      "instruction": "Apply the load and capture the voltage again.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "reference_step_id": "measure_no_load_voltage",
+        "relative_mode": "percent_drop",
+        "percent": 5,
+        "unit": "V"
+      }
+    }
+  ]
+}
+```
+
+### PDF job reports
+
+A completed run can be rendered to a professional PDF job report. The report
+includes an optional business name/logo, customer/site/job/technician fields,
+the device model and serial, a per-step table (reading, limits, PASS/FAIL,
+notes), the overall verdict, and a small chart of comparable captured values.
+
+- Desktop: select a run in `Recent Workflow Runs`, then click `Export PDF
+  Report`.
+- CLI: `fluke workflow report --run <RUN_ID> --output report.pdf` (accepts
+  `--customer`, `--site`, `--job`, `--technician`, `--business-name`, `--logo`,
+  and `--report-notes`, which are persisted with the run).
+
+PDF rendering uses `reportlab`, installed via the `.[reports]` (or `.[full]`)
+extra.
+
+### Built-in trade packs
+
+The following built-in packs use acceptance criteria and safety-conscious
+instructions for a 376 FC-class clamp meter:
+
+- Motor Inrush Baseline
+- Voltage Drop Under Load
+- Three-Phase Balance Survey (sequential L1/L2/L3 with unbalance check)
+- HVAC Capacitor Check (capacitance vs rated +/-6%)
+- HVAC Amp Draw vs Nameplate
+- EV Charger (EVSE) Output Check
+- Solar String Open-Circuit Voltage Check
+- Receptacle Branch Circuit Survey
+
 ## Creating New Workflows Manually
 
 You can also create workflows without the GUI by adding a JSON file directly to [`workflows/`](../workflows).

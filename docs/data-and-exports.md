@@ -93,6 +93,8 @@ A workflow run records:
 - start time
 - end time
 - run result
+- overall pass/fail verdict
+- report metadata (customer, site, job number, technician, business name, logo path, notes)
 
 Each completed or skipped workflow step is stored as a workflow step result.
 
@@ -104,6 +106,10 @@ That result can include:
 - step status
 - optional note
 - optional captured reading
+- pass/fail verdict and the limit-check detail text (for capture steps with acceptance criteria)
+
+These verdict and report-metadata columns were added in schema version 4 and are
+migrated onto existing databases automatically.
 
 ## Replay Filtering and Comparison
 
@@ -192,6 +198,22 @@ Typical desktop file name:
 
 - `workflow-run-<RUN_ID>.md`
 
+### Workflow PDF Job Report
+
+Generated from the `Workflows` tab with the `Export PDF Report` button (enabled
+when a run is selected). The PDF is a professional job report containing an
+optional business name/logo, customer/site/job/technician fields, device model
+and serial, a per-step table (reading, limits, PASS/FAIL, notes), the overall
+verdict, and a small chart of comparable captured values.
+
+Typical desktop file name:
+
+- `workflow-run-<RUN_ID>.pdf`
+
+PDF rendering uses the optional `reportlab` dependency (`.[reports]` or
+`.[full]` extra). The shared implementation lives in
+`packages/fluke_app/report_service.py` and is reused by the CLI.
+
 ## Desktop Export Directory Behavior
 
 The desktop app builds export paths from the export directory shown in the `Settings` tab.
@@ -225,7 +247,21 @@ The CLI currently exposes the raw export formats only. The analysis CSV and segm
 
 ### Workflow output
 
-The CLI workflow runner stores workflow runs in the database, but the interactive command does not currently export a Markdown workflow report file in the same way the desktop app does.
+The CLI workflow runner stores workflow runs in the database, including pass/fail
+verdicts. Review runs with `fluke workflow history` (add `--run <RUN_ID>` for
+per-step verdict detail).
+
+### Workflow PDF report through `workflow report`
+
+Render a stored run to a PDF job report:
+
+```powershell
+fluke workflow report --run "<RUN_ID>" --output report.pdf --customer "Jane Doe" --job "JOB-42"
+```
+
+The `--customer`, `--site`, `--job`, `--technician`, `--business-name`, `--logo`,
+and `--report-notes` flags are persisted with the run so future reports reuse
+them. Requires the `reportlab` package (`.[reports]` / `.[full]` extra).
 
 ### Diagnostics exports
 
