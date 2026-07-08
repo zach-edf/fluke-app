@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fluke_app.bus import EventBus
 from fluke_app.reading_stream import ReadingStreamService
+from fluke_app.reconnect_policy import ReconnectPolicy
 from fluke_ble.adapter import BleAdapter, BleDevice
 from fluke_core import ConnectionState, DeviceInfo, Reading
 from fluke_protocol.profiles.base import DeviceFamilyRuntime, DeviceMatch, DeviceProfile, DeviceServiceSet
@@ -49,6 +50,34 @@ class ConnectionAttemptStatus:
     window_total_s: float = 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class ConnectionStateChanged:
+    """Richer connection-state event published on the shared ``EventBus``.
+
+    Surfaces (desktop/CLI/SDK) subscribe to this to render CONNECTED /
+    RECONNECTING (with attempt count) / DISCONNECTED without polling.
+    """
+
+    state: ConnectionState
+    attempt: int = 0
+    total_attempts: int = 0
+    is_recovery: bool = False
+    message: str = ""
+    device_id: str | None = None
+
+
+def _phase_to_state(phase: str, is_recovery: bool) -> ConnectionState | None:
+    if phase == "recovery_waiting":
+        return ConnectionState.RECONNECTING
+    if phase in ("direct_connect", "rescan", "stream_start"):
+        return ConnectionState.RECONNECTING if is_recovery else ConnectionState.CONNECTING
+    if phase in ("connected", "recovered"):
+        return ConnectionState.CONNECTED
+    if phase in ("connect_failed", "recovery_failed"):
+        return ConnectionState.ERROR
+    return None
+
+
 class DeviceManager:
     def __init__(
         self,
@@ -57,6 +86,7 @@ class DeviceManager:
         event_bus: EventBus | None = None,
         reading_stream: ReadingStreamService | None = None,
         retry_policy: ConnectionRetryPolicy | None = None,
+        reconnect_policy: ReconnectPolicy | None = None,
         auto_reconnect: bool = True,
     ) -> None:
         self._ble = ble_adapter
@@ -64,7 +94,9 @@ class DeviceManager:
         self._bus = event_bus
         self._reading_stream = reading_stream or ReadingStreamService(event_bus)
         self._retry_policy = retry_policy or ConnectionRetryPolicy()
+        self._reconnect_policy = reconnect_policy or ReconnectPolicy()
         self._auto_reconnect = bool(auto_reconnect)
+        self._recovery_attempt = 0
         self._state = ConnectionState.IDLE
         self._active_device_id: str | None = None
         self._active_device: DeviceInfo | None = None
@@ -118,7 +150,7 @@ class DeviceManager:
             profile_id=profile_id,
             is_recovery=False,
         )
-        self._recovery_enabled = self._auto_reconnect
+        self._recovery_enabled = self._reconnect_active()
         return device
 
     async def start_stream(self) -> None:
@@ -155,6 +187,7 @@ class DeviceManager:
                 self._subscribed_characteristics.add(characteristic_uuid)
 
             self._state = ConnectionState.STREAMING
+            self._publish_connection_state(ConnectionState.STREAMING, message="Streaming.")
         except Exception:
             self._state = ConnectionState.ERROR
             raise
@@ -175,7 +208,7 @@ class DeviceManager:
             profile_id=self._last_profile_id,
             is_recovery=True,
         )
-        self._recovery_enabled = self._auto_reconnect
+        self._recovery_enabled = self._reconnect_active()
         return device
 
     async def disconnect(self) -> None:
@@ -185,9 +218,29 @@ class DeviceManager:
         self._cancel_recovery_task()
         await self._disconnect_active(set_idle_if_empty=True)
         self._latest_connection_diagnostics = None
+        self._publish_connection_state(self._state, message="Disconnected.")
 
     def state(self) -> ConnectionState:
         return self._state
+
+    def reconnect_policy(self) -> ReconnectPolicy:
+        return self._reconnect_policy
+
+    def auto_reconnect_enabled(self) -> bool:
+        return self._auto_reconnect and self._reconnect_policy.enabled
+
+    def set_auto_reconnect(self, enabled: bool) -> None:
+        """Enable/disable automatic reconnect at runtime (used by the desktop setting).
+
+        Disabling while a recovery episode is in flight cancels it.
+        """
+        self._auto_reconnect = bool(enabled)
+        if not self._auto_reconnect:
+            self._recovery_enabled = False
+            self._cancel_recovery_task()
+
+    def _reconnect_active(self) -> bool:
+        return self._auto_reconnect and self._reconnect_policy.enabled
 
     def latest_reading(self) -> Reading | None:
         return self._reading_stream.latest()
@@ -342,12 +395,16 @@ class DeviceManager:
         last_error: Exception | None = None
         last_direct_error: Exception | None = None
         target_device = self._last_device_info if self._last_device_id == target_device_id else self._scanned_devices.get(target_device_id)
+        if is_recovery:
+            self._recovery_attempt = 0
 
         direct_attempts = policy.recovery_direct_attempts if is_recovery else policy.initial_connect_attempts
         total_direct = max(1, direct_attempts)
         for attempt in range(1, total_direct + 1):
             if is_recovery and self._recovery_window_exhausted(start):
                 break
+            if is_recovery:
+                self._recovery_attempt += 1
             self._emit_diagnostics(
                 phase="direct_connect",
                 target_device_id=target_device_id,
@@ -427,6 +484,8 @@ class DeviceManager:
             for attempt in range(1, max(1, scan_connect_attempts) + 1):
                 if is_recovery and self._recovery_window_exhausted(start):
                     break
+                if is_recovery:
+                    self._recovery_attempt += 1
                 self._emit_diagnostics(
                     phase="direct_connect",
                     target_device_id=candidate.device_id,
@@ -575,10 +634,16 @@ class DeviceManager:
         self._active_runtime = None
         self._last_device_info = last_device
         self._state = ConnectionState.DISCONNECTED
+        self._publish_connection_state(
+            ConnectionState.DISCONNECTED,
+            is_recovery=False,
+            message="Connection lost.",
+            device_id=device_id,
+        )
 
         if self._explicit_disconnect:
             return
-        if not self._recovery_enabled or not self._auto_reconnect:
+        if not self._recovery_enabled or not self._reconnect_active():
             self._notify_terminal_disconnects()
             return
         loop = self._event_loop
@@ -622,11 +687,39 @@ class DeviceManager:
 
     def _notify_terminal_disconnects(self) -> None:
         self._state = ConnectionState.ERROR if self._latest_connection_diagnostics and self._latest_connection_diagnostics.is_recovery else ConnectionState.DISCONNECTED
+        self._publish_connection_state(
+            self._state,
+            is_recovery=bool(self._latest_connection_diagnostics and self._latest_connection_diagnostics.is_recovery),
+            message="Automatic reconnect gave up." if self._state == ConnectionState.ERROR else "Disconnected.",
+        )
         for handler in list(self._disconnect_handlers):
             try:
                 handler()
             except Exception:
                 pass
+
+    def _publish_connection_state(
+        self,
+        state: ConnectionState,
+        *,
+        attempt: int = 0,
+        total_attempts: int = 0,
+        is_recovery: bool = False,
+        message: str = "",
+        device_id: str | None = None,
+    ) -> None:
+        if self._bus is None:
+            return
+        self._bus.publish(
+            ConnectionStateChanged(
+                state=state,
+                attempt=attempt,
+                total_attempts=total_attempts,
+                is_recovery=is_recovery,
+                message=message,
+                device_id=device_id if device_id is not None else self._active_device_id,
+            )
+        )
 
     def _emit_diagnostics(
         self,
@@ -642,7 +735,7 @@ class DeviceManager:
         is_terminal: bool = False,
     ) -> None:
         elapsed = 0.0
-        window_total = self._retry_policy.recovery_window_s if is_recovery else 0.0
+        window_total = self._effective_give_up_s() if is_recovery else 0.0
         if started_at is not None:
             elapsed = max(0.0, asyncio.get_running_loop().time() - started_at)
         status = ConnectionAttemptStatus(
@@ -658,6 +751,16 @@ class DeviceManager:
             window_total_s=window_total,
         )
         self._latest_connection_diagnostics = status
+        mapped_state = _phase_to_state(phase, is_recovery)
+        if mapped_state is not None:
+            self._publish_connection_state(
+                mapped_state,
+                attempt=attempt,
+                total_attempts=total_attempts,
+                is_recovery=is_recovery,
+                message=message,
+                device_id=target_device_id,
+            )
         for handler in list(self._diagnostic_handlers):
             try:
                 handler(status)
@@ -665,17 +768,36 @@ class DeviceManager:
                 pass
 
     def _retry_backoff(self, index: int, *, is_recovery: bool) -> float:
-        values = self._retry_policy.recovery_backoff_s if is_recovery else self._retry_policy.connect_backoff_s
+        if is_recovery:
+            # Recovery backoff is driven by the dedicated ReconnectPolicy so the
+            # delay grows exponentially (with jitter) across the whole episode.
+            return self._reconnect_policy.delay_for(max(1, self._recovery_attempt))
+        values = self._retry_policy.connect_backoff_s
         if not values:
             return 0.0
         bounded_index = max(0, min(index, len(values) - 1))
         return max(0.0, float(values[bounded_index]))
 
+    def _effective_give_up_s(self) -> float:
+        give_up = self._reconnect_policy.give_up_after_s
+        if give_up and give_up > 0:
+            return float(give_up)
+        return float(self._retry_policy.recovery_window_s)
+
+    def _recovery_attempts_exhausted(self) -> bool:
+        max_attempts = self._reconnect_policy.max_attempts
+        if max_attempts <= 0:
+            return False
+        return self._recovery_attempt >= max_attempts
+
     def _recovery_window_exhausted(self, started_at: float, *, extra_s: float = 0.0) -> bool:
-        if self._retry_policy.recovery_window_s <= 0:
+        if self._recovery_attempts_exhausted():
+            return True
+        give_up = self._effective_give_up_s()
+        if give_up <= 0:
             return False
         elapsed = asyncio.get_running_loop().time() - started_at + max(0.0, extra_s)
-        return elapsed >= self._retry_policy.recovery_window_s
+        return elapsed >= give_up
 
     def _select_recovery_candidate(
         self,

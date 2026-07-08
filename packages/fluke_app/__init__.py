@@ -19,8 +19,15 @@ from fluke_app.workflow_catalog import WorkflowCatalog, default_workflow_directo
 from fluke_app.workflow_runner import WorkflowRunner
 
 if TYPE_CHECKING:
-    from fluke_app.device_manager import ConnectionAttemptStatus, ConnectionRetryPolicy, DeviceManager
+    from fluke_app.device_manager import (
+        ConnectionAttemptStatus,
+        ConnectionRetryPolicy,
+        ConnectionStateChanged,
+        DeviceManager,
+    )
     from fluke_app.reading_stream import ReadingStreamService
+    from fluke_app.reconnect_policy import ReconnectPolicy
+    from fluke_app.session_continuity import SessionConnectionMarkers
 
 __all__ = [
     "DeviceManager",
@@ -33,6 +40,9 @@ __all__ = [
     "clear_logging_data",
     "ConnectionAttemptStatus",
     "ConnectionRetryPolicy",
+    "ConnectionStateChanged",
+    "ReconnectPolicy",
+    "SessionConnectionMarkers",
     "download_logging_data",
     "export_debug_bundle",
     "import_logging_sessions",
@@ -60,6 +70,18 @@ def __getattr__(name: str) -> Any:
         from fluke_app.device_manager import ConnectionAttemptStatus as _ConnectionAttemptStatus
 
         return _ConnectionAttemptStatus
+    if name == "ConnectionStateChanged":
+        from fluke_app.device_manager import ConnectionStateChanged as _ConnectionStateChanged
+
+        return _ConnectionStateChanged
+    if name == "ReconnectPolicy":
+        from fluke_app.reconnect_policy import ReconnectPolicy as _ReconnectPolicy
+
+        return _ReconnectPolicy
+    if name == "SessionConnectionMarkers":
+        from fluke_app.session_continuity import SessionConnectionMarkers as _SessionConnectionMarkers
+
+        return _SessionConnectionMarkers
     if name == "ReadingStreamService":
         from fluke_app.reading_stream import ReadingStreamService as _ReadingStreamService
 
