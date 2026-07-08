@@ -9,6 +9,7 @@ from types import ModuleType
 from typing import Any
 
 from fluke_app.workflow_catalog import load_workflow_catalog
+from fluke_core.paths import bundled_data_dir
 from fluke_protocol import ProfileRegistry
 from fluke_protocol.profiles.base import DeviceProfile
 from fluke_protocol.profiles.fluke_376fc import Fluke376FCProfile, FlukeAdvancedClampFamilyProfile, FlukeClampMeterFamilyProfile
@@ -52,6 +53,9 @@ class PluginBundle:
 
 
 def default_plugin_root() -> Path:
+    bundled = bundled_data_dir("plugins")
+    if bundled is not None:
+        return bundled
     return Path(__file__).resolve().parents[2] / "plugins"
 
 

@@ -204,6 +204,11 @@ class AppPresenter:
         self.refresh_recent_sessions()
         self.refresh_workflows()
 
+    @property
+    def workflow_catalog(self) -> object:
+        """Read-only access to the loaded workflow catalog (used by self-test)."""
+        return self._workflow_catalog
+
     def home_view_model(self) -> HomeViewModel:
         with self._lock:
             return replace(self._home)
