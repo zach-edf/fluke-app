@@ -7,7 +7,7 @@ Import from this module instead of PySide6 directly so that:
 
 try:
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtGui import QIcon, QKeySequence, QShortcut
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -27,6 +27,7 @@ try:
         QPushButton,
         QScrollArea,
         QSpinBox,
+        QSystemTrayIcon,
         QTabWidget,
         QTableWidget,
         QTableWidgetItem,
@@ -43,8 +44,10 @@ except ModuleNotFoundError as _exc:
 __all__ = [
     "Qt",
     "QTimer",
+    "QIcon",
     "QKeySequence",
     "QShortcut",
+    "QSystemTrayIcon",
     "QAbstractItemView",
     "QApplication",
     "QCheckBox",
