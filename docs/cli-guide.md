@@ -248,6 +248,7 @@ Options:
 - `--title`
 - `--notes`
 - `--tags`
+- `--asset` (attach the session to a tracked asset id; the asset must already exist)
 - `--csv-output`
 - `--json-output`
 - `--quiet`
@@ -293,12 +294,28 @@ Options:
 
 - `--database` on the parent `sessions` command
 - `--limit` on `list`
+- `--asset` on `list` (only show sessions linked to that asset id)
 
 Example:
 
 ```powershell
 fluke sessions --database C:\path\to\fluke.db list --limit 10
+fluke sessions list --asset <ASSET_ID>
 ```
+
+### `sessions assign-asset`
+
+Use this to link or unlink a recorded session to a tracked asset.
+
+```powershell
+fluke sessions assign-asset --session "<SESSION_ID>" --asset <ASSET_ID>
+```
+
+Options:
+
+- `--database` on the parent `sessions` command
+- `--session`
+- `--asset` (omit to clear the session's asset link)
 
 ### `sessions export`
 
@@ -351,6 +368,37 @@ Options:
 - `--download-report-output`
 - `--max-blocks-per-request`
 - `--command-timeout-seconds`
+
+### `assets`
+
+Use these to manage tracked equipment and trend its readings over time. See the
+[Assets and Trending Guide](assets-and-trending.md) for the full feature tour.
+
+`--database` is a group-level flag on the `assets` command, so it goes before the
+subcommand.
+
+```powershell
+fluke assets create --name "Line 3 Motor" --type motor --location "Bay 2"
+fluke assets list
+fluke assets show --asset <ASSET_ID>
+fluke assets trend --asset <ASSET_ID>
+```
+
+Subcommands and options:
+
+- `assets create`: `--name` (required), `--type`, `--location`, `--notes`, `--id`
+- `assets list`: `--limit`
+- `assets show`: `--asset` (required)
+- `assets trend`: `--asset` (required), `--measurement`, `--csv-output`
+
+`list`, `show`, and `trend` all support the global `--json` flag. `assets trend`
+prints a per-session table of min/max/avg/median statistics for each measurement
+type, normalizing mixed-unit sessions to a common display unit.
+
+```powershell
+fluke --json assets trend --asset <ASSET_ID> --measurement current_inrush
+fluke assets trend --asset <ASSET_ID> --csv-output exports/asset-trend.csv
+```
 
 ### `workflow list`
 
@@ -656,8 +704,10 @@ Commands that commonly use the database:
 
 - `log`
 - `sessions list`
+- `sessions assign-asset`
 - `sessions import-device-memory`
 - `sessions export`
+- `assets` (list, create, show, trend)
 - `workflow run`
 - `debug bundle`
 
@@ -674,5 +724,6 @@ Commands that commonly use the database:
 - [Getting Started](getting-started.md)
 - [Desktop User Guide](desktop-guide.md)
 - [Workflows Page Guide](workflows-page.md)
+- [Assets and Trending Guide](assets-and-trending.md)
 - [Data and Exports Guide](data-and-exports.md)
 - [SDK Guide](sdk-guide.md)

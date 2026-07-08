@@ -17,7 +17,17 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 
     list_parser = session_subparsers.add_parser("list", help="List recent sessions")
     list_parser.add_argument("--limit", type=positive_int, default=20, help="How many sessions to show")
+    list_parser.add_argument("--asset", default=None, help="Only show sessions linked to this asset id")
     list_parser.set_defaults(func=handle_list)
+
+    assign_parser = session_subparsers.add_parser("assign-asset", help="Link or unlink a session to an asset")
+    assign_parser.add_argument("--session", required=True, help="Session id to update")
+    assign_parser.add_argument(
+        "--asset",
+        default=None,
+        help="Asset id to link; omit to clear the session's asset",
+    )
+    assign_parser.set_defaults(func=handle_assign_asset)
 
     export_parser = session_subparsers.add_parser("export", help="Export a recorded session")
     export_parser.add_argument("--session", required=True, help="Session id to export")
@@ -64,7 +74,10 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 async def handle_list(args: argparse.Namespace) -> int:
     store = open_store(args.database or default_database_path())
     try:
-        sessions = store.sessions.list_recent(limit=args.limit)
+        if getattr(args, "asset", None):
+            sessions = store.sessions.list_for_asset(args.asset, limit=args.limit)
+        else:
+            sessions = store.sessions.list_recent(limit=args.limit)
     finally:
         store.close()
 
@@ -80,6 +93,27 @@ async def handle_list(args: argparse.Namespace) -> int:
     else:
         print("Recent sessions:")
         output_list(sessions, False, format_session, session_to_dict)
+    return 0
+
+
+async def handle_assign_asset(args: argparse.Namespace) -> int:
+    store = open_store(args.database or default_database_path())
+    try:
+        session = store.sessions.get(args.session)
+        if session is None:
+            print(f"Unknown session: {args.session}")
+            return 1
+        if args.asset is not None and store.assets.get(args.asset) is None:
+            print(f"Unknown asset: {args.asset}")
+            return 1
+        store.sessions.assign_asset(args.session, args.asset)
+    finally:
+        store.close()
+
+    if args.asset:
+        print(f"Linked session {args.session} to asset {args.asset}")
+    else:
+        print(f"Cleared asset link on session {args.session}")
     return 0
 
 

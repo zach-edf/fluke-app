@@ -656,12 +656,14 @@ def create_main_window(runtime) -> QWidget:
             self._live = _live_panel(self, runtime)
             self._session = _session_panel(self, runtime)
             self._workflow = _workflow_panel(self, runtime)
+            self._assets = _assets_panel(self, runtime)
             self._settings = _settings_panel(self, runtime)
             self._tabs.addTab(self._home.panel, "Home")
             self._tabs.addTab(self._discovery.panel, "Device Discovery")
             self._tabs.addTab(self._live.panel, "Live Reading")
             self._tabs.addTab(self._session.panel, "Session")
             self._tabs.addTab(self._workflow.panel, "Workflows")
+            self._tabs.addTab(self._assets.panel, "Assets")
             self._tabs.addTab(self._settings.panel, "Settings")
             outer.addWidget(self._tabs)
 
@@ -683,7 +685,7 @@ def create_main_window(runtime) -> QWidget:
             self.setCentralWidget(root)
 
             # Keyboard shortcuts
-            for i in range(6):
+            for i in range(7):
                 shortcut = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
                 shortcut.activated.connect(lambda idx=i: self._tabs.setCurrentIndex(idx))
 
@@ -740,6 +742,7 @@ def create_main_window(runtime) -> QWidget:
             _refresh_live(runtime, self._live)
             _refresh_session(runtime, self._session)
             _refresh_workflow(runtime, self._workflow)
+            _refresh_assets(runtime, self._assets)
             _refresh_settings(runtime, self._settings)
             # Status bar
             home = runtime.presenter.home_view_model()
@@ -1013,6 +1016,8 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
 
     marker_input = QLineEdit()
     marker_input.setPlaceholderText("Add a marker note during logging")
+    asset_selector = QComboBox()
+    asset_selector.setToolTip("Optionally attach this session to a tracked asset for trending")
     logging_interval_input = QLineEdit()
     logging_interval_input.setPlaceholderText("Interval seconds")
     logging_interval_input.setToolTip("Logging interval in seconds")
@@ -1044,6 +1049,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     form = QFormLayout()
     form.addRow("Session Title", title_input)
     form.addRow("Session Notes", notes_input)
+    form.addRow("Asset (optional)", asset_selector)
     form.addRow("Chart Mode", chart_mode)
 
     start_button.clicked.connect(
@@ -1052,6 +1058,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             lambda: runtime.presenter.start_logging(
                 title=_text_or_none(title_input.text()),
                 notes=_text_or_none(notes_input.toPlainText()),
+                asset_id=asset_selector.currentData(),
             ),
         )
     )
@@ -1201,6 +1208,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             "alert_status": alert_status, "last_updated": last_updated, "summary": summary,
             "marker_count": marker_count, "title_input": title_input,
             "marker_input": marker_input,
+            "asset_selector": asset_selector,
             "logging_interval_input": logging_interval_input,
             "logging_duration_input": logging_duration_input,
             "logging_manual_checkbox": logging_manual_checkbox,
@@ -1417,11 +1425,33 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
     segment_filter.currentIndexChanged.connect(on_segment_changed)
     compare_filter.currentIndexChanged.connect(on_compare_changed)
 
+    assign_asset_combo = QComboBox()
+    assign_asset_combo.setToolTip("Link the selected session to a tracked asset")
+    assign_asset_button = QPushButton("Assign Asset")
+    assign_asset_button.setToolTip("Attach or detach the selected session from an asset")
+
+    def on_assign_asset() -> None:
+        session_id = _selected_session_id(runtime)
+        if session_id is None:
+            runtime.presenter.report_error("Select a session before assigning an asset.")
+            return
+        _safe_call(
+            runtime,
+            lambda: runtime.presenter.assign_session_asset(session_id, assign_asset_combo.currentData()),
+        )
+
+    assign_asset_button.clicked.connect(on_assign_asset)
+
     session_list_column = QVBoxLayout()
     header = QLabel("Recent Sessions")
     header.setObjectName("section_header")
     session_list_column.addWidget(header)
     session_list_column.addWidget(recent)
+    assign_row = QHBoxLayout()
+    assign_row.addWidget(QLabel("Asset"))
+    assign_row.addWidget(assign_asset_combo, 1)
+    assign_row.addWidget(assign_asset_button)
+    session_list_column.addLayout(assign_row)
     memory_panel = QWidget()
     memory_panel_layout = QVBoxLayout(memory_panel)
     memory_panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -1511,6 +1541,7 @@ def _session_panel(window: QWidget, runtime) -> _PanelRefs:
             "compare_summary": compare_summary,
             "database": database, "export_status": export_status,
             "recent": recent, "notes": notes, "markers_table": markers_table,
+            "assign_asset_combo": assign_asset_combo, "assign_asset_button": assign_asset_button,
             "context_filter": context_filter, "context_label": context_label,
             "replay_channel_filter": replay_channel_filter, "replay_channel_label": replay_channel_label,
             "axis_filter": axis_filter, "axis_label": axis_label,
@@ -1937,6 +1968,14 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     chart_notice.setText(live.chart_notice_text)
     chart_notice.setVisible(bool(live.chart_notice_text))
     panel.refs["session"].setText(f"Session: {live.session_title or 'No active session'}")
+    asset_selector = panel.refs["asset_selector"]
+    asset_view = runtime.presenter.assets_view_model()
+    _sync_combo_rows(
+        asset_selector,
+        [(None, "No asset")] + [(asset_id, name) for asset_id, name in asset_view.asset_options],
+        asset_selector.currentData(),
+    )
+    asset_selector.setEnabled(not live.is_logging)
     panel.refs["last_updated"].setText(f"Last Update: {live.last_updated_text}")
     panel.refs["summary"].setText(live.summary_text)
     panel.refs["marker_count"].setText(live.marker_count_text)
@@ -2109,6 +2148,14 @@ def _refresh_session(runtime, panel: _PanelRefs) -> None:
         [(None, "No Comparison")] + [(item.session_id, item.display_text) for item in session.available_compare_sessions],
         session.compare_session_id,
     )
+    asset_view = runtime.presenter.assets_view_model()
+    _sync_combo_rows(
+        panel.refs["assign_asset_combo"],
+        [(None, "No asset")] + [(asset_id, name) for asset_id, name in asset_view.asset_options],
+        session.selected_session_asset_id,
+    )
+    panel.refs["assign_asset_combo"].setEnabled(session.selected_session_id is not None)
+    panel.refs["assign_asset_button"].setEnabled(session.selected_session_id is not None)
     show_context_filter = bool(session.available_contexts)
     show_replay_channel = len(session.available_replay_channels) > 1
     show_segment_filter = session.selected_axis_mode == "by_segment" and bool(session.available_segments)
@@ -2251,6 +2298,259 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
     panel.refs["note_input"].setEnabled(workflow.is_running)
     panel.refs["export_report_button"].setEnabled(workflow.selected_run_id is not None)
     panel.refs["export_pdf_button"].setEnabled(workflow.selected_run_id is not None)
+
+
+def _section_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet("font-weight: 600;")
+    return label
+
+
+def _assets_panel(window: QWidget, runtime) -> _PanelRefs:
+    from fluke_core.models.asset import SUGGESTED_ASSET_TYPES
+
+    panel = QWidget()
+    layout = QHBoxLayout(panel)
+
+    # --- Left: asset list + create/edit form -----------------------------
+    left = QVBoxLayout()
+    left.addWidget(_section_label("Tracked Assets"))
+    assets_table = _make_table(["Name", "Type", "Sessions"], min_height=180)
+    left.addWidget(assets_table)
+
+    status = QLabel()
+    status.setWordWrap(True)
+    left.addWidget(status)
+
+    name_input = QLineEdit()
+    name_input.setPlaceholderText("e.g. Line 3 Drive Motor")
+    type_input = QComboBox()
+    type_input.setEditable(True)
+    type_input.addItem("")
+    for suggestion in SUGGESTED_ASSET_TYPES:
+        type_input.addItem(suggestion)
+    location_input = QLineEdit()
+    location_input.setPlaceholderText("e.g. Bay 2, Panel A")
+    notes_input = QTextEdit()
+    notes_input.setFixedHeight(70)
+    notes_input.setPlaceholderText("Optional notes about this asset.")
+
+    form = QFormLayout()
+    form.addRow("Name", name_input)
+    form.addRow("Type", type_input)
+    form.addRow("Location", location_input)
+    form.addRow("Notes", notes_input)
+    left.addLayout(form)
+
+    new_button = QPushButton("New Asset")
+    save_button = QPushButton("Save Asset")
+    delete_button = QPushButton("Delete Asset")
+    delete_button.setObjectName("danger_button")
+    button_row = QHBoxLayout()
+    button_row.addWidget(new_button)
+    button_row.addWidget(save_button)
+    button_row.addWidget(delete_button)
+    left.addLayout(button_row)
+    left.addStretch(1)
+
+    # --- Right: linked sessions + trend chart ----------------------------
+    right = QVBoxLayout()
+    detail = QLabel()
+    detail.setWordWrap(True)
+    detail.setObjectName("section_header")
+    right.addWidget(detail)
+
+    right.addWidget(_section_label("Linked Sessions"))
+    sessions_table = _make_table(["Title", "Started", "Ended"], min_height=120)
+    right.addWidget(sessions_table)
+
+    measurement_combo = QComboBox()
+    measurement_combo.setToolTip("Choose which measurement type to trend")
+    stat_combo = QComboBox()
+    stat_combo.addItem("Minimum", "min")
+    stat_combo.addItem("Maximum", "max")
+    stat_combo.addItem("Average", "avg")
+    stat_combo.addItem("Median", "median")
+    stat_combo.setCurrentIndex(2)
+    stat_combo.setToolTip("Choose which per-session statistic to plot")
+    selector_row = QHBoxLayout()
+    selector_row.addWidget(QLabel("Measurement"))
+    selector_row.addWidget(measurement_combo, 1)
+    selector_row.addWidget(QLabel("Statistic"))
+    selector_row.addWidget(stat_combo)
+    right.addLayout(selector_row)
+
+    chart = build_reading_chart(
+        title="Asset Trend",
+        empty_text="Link sessions with numeric measurements to this asset to see its trend over time.",
+    )
+    right.addWidget(chart.widget)
+
+    export_trend = QPushButton("Export Trend CSV")
+    export_trend.setToolTip("Export per-session trend statistics for this asset")
+    export_chart = QPushButton("Export Trend Chart")
+    export_chart.setToolTip("Save the trend chart as a PNG image")
+    export_row = QHBoxLayout()
+    export_row.addWidget(export_trend)
+    export_row.addWidget(export_chart)
+    right.addLayout(export_row)
+    export_status = QLabel()
+    export_status.setWordWrap(True)
+    right.addWidget(export_status)
+
+    layout.addLayout(left, 2)
+    layout.addLayout(right, 3)
+
+    editing = {"asset_id": None, "loaded_id": object()}
+
+    def load_form(view) -> None:
+        name_input.setText(view.selected_asset_name)
+        type_input.setEditText(view.selected_asset_type)
+        location_input.setText(view.selected_asset_location)
+        notes_input.setPlainText(view.selected_asset_notes)
+
+    def clear_form() -> None:
+        editing["asset_id"] = None
+        editing["loaded_id"] = None
+        name_input.clear()
+        type_input.setEditText("")
+        location_input.clear()
+        notes_input.clear()
+        name_input.setFocus()
+
+    def on_asset_selection_changed() -> None:
+        selected_id = _selected_table_id(assets_table)
+        if selected_id is None:
+            return
+        editing["asset_id"] = selected_id
+        editing["loaded_id"] = selected_id
+        _safe_call(runtime, lambda: runtime.presenter.select_asset(selected_id))
+        load_form(runtime.presenter.assets_view_model())
+
+    def on_save() -> None:
+        name = name_input.text()
+        asset_type = type_input.currentText()
+        location = location_input.text()
+        notes = notes_input.toPlainText()
+        if editing["asset_id"]:
+            asset_id = editing["asset_id"]
+            _safe_call(runtime, lambda: runtime.presenter.update_asset(asset_id, name, asset_type, location, notes))
+        else:
+            def _create() -> None:
+                new_id = runtime.presenter.create_asset(name, asset_type, location, notes)
+                editing["asset_id"] = new_id
+                editing["loaded_id"] = new_id
+            _safe_call(runtime, _create)
+
+    def on_delete() -> None:
+        asset_id = editing["asset_id"]
+        if not asset_id:
+            return
+        if not _confirm(window, "Delete Asset", "Delete this asset? Linked sessions will remain but become unassigned."):
+            return
+        _safe_call(runtime, lambda: runtime.presenter.delete_asset(asset_id))
+        clear_form()
+
+    assets_table.itemSelectionChanged.connect(on_asset_selection_changed)
+    new_button.clicked.connect(clear_form)
+    save_button.clicked.connect(on_save)
+    delete_button.clicked.connect(on_delete)
+    measurement_combo.currentIndexChanged.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.select_asset_measurement(measurement_combo.currentData()))
+    )
+    stat_combo.currentIndexChanged.connect(
+        lambda: _safe_call(runtime, lambda: runtime.presenter.select_asset_stat(stat_combo.currentData()))
+    )
+    export_trend.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_asset_trend_csv(_asset_export_path(runtime, "trend.csv")),
+            "Asset Trend CSV",
+        )
+    )
+    export_chart.clicked.connect(
+        lambda: _export_chart_with_dialog(window, runtime, chart, _asset_export_path(runtime, "trend.png"))
+    )
+
+    return _PanelRefs(
+        panel,
+        {
+            "assets_table": assets_table,
+            "status": status,
+            "detail": detail,
+            "sessions_table": sessions_table,
+            "measurement_combo": measurement_combo,
+            "stat_combo": stat_combo,
+            "chart": chart,
+            "export_trend": export_trend,
+            "export_chart": export_chart,
+            "export_status": export_status,
+            "delete_button": delete_button,
+            "_editing": editing,
+            "_load_form": load_form,
+        },
+    )
+
+
+def _refresh_assets(runtime, panel: _PanelRefs) -> None:
+    view = runtime.presenter.assets_view_model()
+    panel.refs["status"].setText(view.status_text)
+    panel.refs["detail"].setText(view.detail_text)
+    panel.refs["export_status"].setText(view.export_status_text)
+
+    _sync_table_rows(
+        panel.refs["assets_table"],
+        [(a.asset_id, [a.name, a.asset_type or "-", a.session_count_text]) for a in view.assets],
+    )
+    if view.selected_asset_id is not None:
+        table = panel.refs["assets_table"]
+        for i in range(table.rowCount()):
+            item = table.item(i, 0)
+            if item and item.data(0x0100) == view.selected_asset_id:
+                if table.currentRow() != i:
+                    table.selectRow(i)
+                break
+        # Populate the edit form the first time a selection is rendered.
+        editing = panel.refs["_editing"]
+        if editing.get("loaded_id") != view.selected_asset_id:
+            editing["asset_id"] = view.selected_asset_id
+            editing["loaded_id"] = view.selected_asset_id
+            panel.refs["_load_form"](view)
+
+    _sync_table_rows(
+        panel.refs["sessions_table"],
+        [(s.session_id, [s.title, s.started_at_text, s.ended_at_text]) for s in view.linked_sessions],
+    )
+    _sync_combo_rows(
+        panel.refs["measurement_combo"],
+        [(m.context_id, f"{m.label} ({m.unit})" if m.unit else m.label) for m in view.available_measurements],
+        view.selected_measurement_id,
+    )
+    stat_combo = panel.refs["stat_combo"]
+    stat_index = stat_combo.findData(view.selected_stat)
+    if stat_index >= 0 and stat_combo.currentIndex() != stat_index:
+        stat_combo.blockSignals(True)
+        try:
+            stat_combo.setCurrentIndex(stat_index)
+        finally:
+            stat_combo.blockSignals(False)
+
+    panel.refs["chart"].set_data(
+        view.trend_points,
+        unit_text=view.trend_unit_text,
+        measurement_label=view.trend_label_text or "Asset Trend",
+        x_axis_mode="datetime",
+        x_axis_title="Session Date",
+    )
+    panel.refs["export_trend"].setEnabled(bool(view.trend_points))
+    panel.refs["export_chart"].setEnabled(bool(view.trend_points))
+    panel.refs["delete_button"].setEnabled(view.selected_asset_id is not None)
+
+
+def _asset_export_path(runtime, suffix: str) -> Path:
+    asset_id = runtime.presenter.assets_view_model().selected_asset_id or "asset"
+    return _export_directory(runtime) / f"asset-{asset_id}-{suffix}"
 
 
 # ---------------------------------------------------------------------------

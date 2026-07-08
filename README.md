@@ -63,6 +63,7 @@ What exists now:
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow capture steps support pass/fail acceptance criteria (absolute min/max plus relative percent-within, percent-drop, and phase-unbalance checks) with per-step and overall run verdicts
   - workflow run history can be reviewed and exported as Markdown or professional PDF job reports from the desktop UI and CLI
+  - optional asset tracking: attach sessions to equipment and trend a piece of gear's min/max/avg/median readings over time, with trend chart and CSV export
 - shared alerting (`AlertEvaluator`) with high/low thresholds, out-of-band duration debounce, and reading-status / connection alerts, surfaced in both the CLI and desktop app (banner, beep, OS notification, and session markers)
 - spoken readings (text-to-speech) via a platform-native backend abstraction, with interval / on-stable / on-change / on-alert modes in the CLI and desktop
 - optional MQTT publishing (`.[mqtt]`) of readings plus availability (LWT) and Home Assistant MQTT Discovery, available from the CLI and SDK
@@ -325,7 +326,15 @@ fluke workflow list
 fluke workflow run --workflow battery_pack_check_v1 --device "<DEVICE_ID>" --profile fluke_376fc
 ```
 
-### 6. Structured output
+### 6. Track equipment and trend readings
+
+```bash
+fluke assets create --name "Line 3 Motor" --type motor --location "Bay 2"
+fluke log --device "<DEVICE_ID>" --asset "<ASSET_ID>" --duration 30
+fluke assets trend --asset "<ASSET_ID>" --measurement current_inrush
+```
+
+### 7. Structured output
 
 The `--json` flag is global, so place it before the subcommand:
 
@@ -336,7 +345,7 @@ fluke --json sessions list
 fluke --json workflow list
 ```
 
-### 7. Plugins and diagnostics
+### 8. Plugins and diagnostics
 
 ```bash
 fluke plugins list
@@ -364,6 +373,7 @@ The desktop app currently includes:
 - Live Reading
 - Session
 - Workflows
+- Assets
 - Settings
 
 ### Live Reading
@@ -448,6 +458,17 @@ Built-in workflow packs:
 - EV Charger (EVSE) Output Check
 - Solar String Open-Circuit Voltage Check
 - Receptacle Branch Circuit Survey
+
+### Assets
+
+The Assets tab supports maintenance-style equipment tracking:
+
+- create / edit / delete tracked assets (name, type, location, notes)
+- attach a session to an asset when starting logging (Live Reading tab) or retroactively (Session tab)
+- per-asset trend chart (x = session date, y = chosen stat) with a measurement selector and min / max / avg / median selector
+- trend chart PNG export and per-session trend CSV export
+
+Assets are optional. If you never create one, capture, session, and export behavior are unchanged, and sessions recorded before the feature stay unassigned. See [docs/assets-and-trending.md](docs/assets-and-trending.md).
 
 ## Workflows
 
@@ -543,6 +564,15 @@ These are meant to lower the barrier for remote debugging when hardware is unava
 - device id
 - start / end time
 - profile id
+- optional asset id
+
+### Asset
+
+- name
+- asset type (free text, suggested categories like motor/panel/HVAC unit/battery/charger)
+- location
+- notes
+- created at
 
 ### Marker
 
@@ -673,6 +703,7 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/getting-started.md](docs/getting-started.md)
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
+- [docs/assets-and-trending.md](docs/assets-and-trending.md)
 - [docs/data-and-exports.md](docs/data-and-exports.md)
 - [docs/integrations.md](docs/integrations.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)

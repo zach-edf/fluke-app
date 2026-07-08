@@ -70,10 +70,14 @@ def format_session(session: object) -> str:
     """Human-readable single-line session summary."""
     ended = session.ended_at.isoformat() if session.ended_at else "-"
     title = session.title or "-"
-    return (
+    line = (
         f"- {session.session_id} | device={session.device_id} | "
         f"started={session.started_at.isoformat()} | ended={ended} | title={title}"
     )
+    asset_id = getattr(session, "asset_id", None)
+    if asset_id:
+        line += f" | asset={asset_id}"
+    return line
 
 
 def session_to_dict(session: object) -> dict[str, Any]:
@@ -88,6 +92,34 @@ def session_to_dict(session: object) -> dict[str, Any]:
         "tags": list(getattr(session, "tags", [])),
         "app_version": getattr(session, "app_version", None),
         "profile_id": getattr(session, "profile_id", None),
+        "asset_id": getattr(session, "asset_id", None),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Asset formatters
+# ---------------------------------------------------------------------------
+
+def format_asset(asset: object) -> str:
+    """Human-readable single-line asset summary."""
+    parts = [f"- {asset.asset_id} | name={asset.name}"]
+    if asset.asset_type:
+        parts.append(f"type={asset.asset_type}")
+    if asset.location:
+        parts.append(f"location={asset.location}")
+    return " | ".join(parts)
+
+
+def asset_to_dict(asset: object) -> dict[str, Any]:
+    """JSON-serializable dict for an asset."""
+    created_at = getattr(asset, "created_at", None)
+    return {
+        "asset_id": asset.asset_id,
+        "name": asset.name,
+        "asset_type": asset.asset_type,
+        "location": asset.location,
+        "notes": asset.notes,
+        "created_at": created_at.isoformat() if created_at else None,
     }
 
 

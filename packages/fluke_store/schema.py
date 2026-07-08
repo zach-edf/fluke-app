@@ -5,6 +5,15 @@ SCHEMA_VERSION = 4
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS assets (
+    asset_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     ble_address TEXT NOT NULL,
@@ -29,7 +38,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     tags_json TEXT NOT NULL,
     app_version TEXT NULL,
     profile_id TEXT NULL,
-    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE RESTRICT
+    asset_id TEXT NULL,
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE RESTRICT,
+    FOREIGN KEY (asset_id) REFERENCES assets(asset_id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS readings (
@@ -77,7 +88,9 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     workflow_title TEXT,
     verdict TEXT NOT NULL DEFAULT 'not_evaluated',
     report_meta_json TEXT NOT NULL DEFAULT '{}',
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    asset_id TEXT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+    FOREIGN KEY (asset_id) REFERENCES assets(asset_id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS workflow_step_results (

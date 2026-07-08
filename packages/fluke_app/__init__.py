@@ -19,6 +19,13 @@ from fluke_app.device_logging import (
     read_logging_status,
     write_logging_config,
 )
+from fluke_app.asset_trend_service import (
+    AssetTrend,
+    AssetTrendService,
+    TrendPoint,
+    TrendSeries,
+    export_asset_trend_csv,
+)
 from fluke_app.export_service import ExportService
 from fluke_app.report_service import ReportService
 from fluke_app.session_recorder import SessionRecorder, new_session
@@ -41,6 +48,8 @@ __all__ = [
     "AlertEvaluation",
     "AlertEvaluator",
     "AlertKind",
+    "AssetTrend",
+    "AssetTrendService",
     "DeviceManager",
     "EventBus",
     "ExportService",
@@ -49,6 +58,9 @@ __all__ = [
     "SpeechConfig",
     "SpeechMode",
     "SpeechService",
+    "TrendPoint",
+    "TrendSeries",
+    "export_asset_trend_csv",
     "reading_to_speech_text",
     "select_backend",
     "LOGGING_VALUE_SOURCES",

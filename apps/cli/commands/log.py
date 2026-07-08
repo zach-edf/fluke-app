@@ -29,6 +29,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--title", default=None, help="Optional session title")
     parser.add_argument("--notes", default=None, help="Optional session notes")
     parser.add_argument("--tags", default="", help="Comma-separated session tags")
+    parser.add_argument("--asset", default=None, help="Attach this session to a tracked asset id")
     parser.add_argument("--csv-output", default=None, help="Optional export path for session CSV")
     parser.add_argument("--json-output", default=None, help="Optional export path for session JSON")
     parser.add_argument("--quiet", action="store_true", help="Do not print each reading while logging")
@@ -84,6 +85,9 @@ async def handle(args: argparse.Namespace) -> int:
                 print(f"Warning: MQTT publishing disabled ({exc}).", file=sys.stderr)
                 publisher = None
 
+        if args.asset and store.assets.get(args.asset) is None:
+            raise RuntimeError(f"Unknown asset {args.asset!r}. Create it first with `fluke assets create`.")
+
         session = recorder.start(
             new_session(
                 device_id=device.device_id,
@@ -92,6 +96,7 @@ async def handle(args: argparse.Namespace) -> int:
                 tags=parse_tags(args.tags),
                 app_version="0.1.0",
                 profile_id=device.profile_id or args.profile,
+                asset_id=args.asset,
             )
         )
 

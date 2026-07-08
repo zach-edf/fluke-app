@@ -8,8 +8,12 @@ import json
 from pathlib import Path
 from statistics import median
 import threading
+from uuid import uuid4
 
 from apps.desktop.viewmodels import (
+    AssetSummaryViewModel,
+    AssetsViewModel,
+    AssetTrendMeasurementViewModel,
     DeviceMemorySessionViewModel,
     DiscoveryViewModel,
     HomeViewModel,
@@ -31,6 +35,7 @@ from apps.desktop.viewmodels import (
 from fluke_app import (
     AlertConfig,
     AlertEvaluator,
+    AssetTrendService,
     ExportService,
     ReportService,
     SessionRecorder,
@@ -58,6 +63,7 @@ from fluke_core.enums import (
     WorkflowStepResultStatus,
     WorkflowVerdict,
 )
+from fluke_core.models.asset import Asset
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
 from fluke_core.models.reading import Reading
@@ -159,7 +165,10 @@ class AppPresenter:
             SessionCsvExporter(),
             SessionJsonExporter(device_repo=store.devices),
         )
+        self._asset_trend_service = AssetTrendService(store.sessions, store.readings)
+        self._asset_trend_cache: object | None = None
         self._lock = threading.Lock()
+        self._assets = AssetsViewModel()
         self._home = HomeViewModel()
         self._discovery = DiscoveryViewModel()
         self._live = LiveReadingViewModel()
@@ -213,6 +222,7 @@ class AppPresenter:
         self.refresh_recent_devices()
         self.refresh_recent_sessions()
         self.refresh_workflows()
+        self.refresh_assets()
 
     def home_view_model(self) -> HomeViewModel:
         with self._lock:
@@ -237,6 +247,10 @@ class AppPresenter:
     def workflow_view_model(self) -> WorkflowViewModel:
         with self._lock:
             return replace(self._workflow)
+
+    def assets_view_model(self) -> AssetsViewModel:
+        with self._lock:
+            return replace(self._assets)
 
     async def scan_devices(self, timeout_s: float = 5.0) -> tuple[ScannedDeviceViewModel, ...]:
         self._remember_running_loop()
@@ -374,12 +388,21 @@ class AppPresenter:
                 self.refresh_recent_devices()
                 self.refresh_recent_sessions()
 
-    def start_logging(self, title: str | None = None, notes: str | None = None, tags: list[str] | None = None) -> str:
+    def start_logging(
+        self,
+        title: str | None = None,
+        notes: str | None = None,
+        tags: list[str] | None = None,
+        asset_id: str | None = None,
+    ) -> str:
         if self._current_device is None:
             raise RuntimeError("Connect to a device before starting logging.")
         active = self._recorder.active_session()
         if active is not None:
             return active.session_id
+
+        if asset_id and self._store.assets.get(asset_id) is None:
+            raise RuntimeError("The selected asset no longer exists.")
 
         session = self._recorder.start(
             new_session(
@@ -389,6 +412,7 @@ class AppPresenter:
                 tags=tags or [],
                 app_version=self._app_version,
                 profile_id=self._current_device.profile_id,
+                asset_id=asset_id,
             )
         )
         with self._lock:
@@ -409,6 +433,8 @@ class AppPresenter:
                 selected_session_id=session.session_id,
             )
         self.refresh_recent_sessions()
+        if asset_id:
+            self.refresh_assets()
         self.select_session(session.session_id)
         return session.session_id
 
@@ -447,6 +473,222 @@ class AppPresenter:
         if self.session_view_model().selected_session_id == marker.session_id:
             self.select_session(marker.session_id)
         return marker
+
+    # ------------------------------------------------------------------
+    # Assets and trending
+    # ------------------------------------------------------------------
+
+    def refresh_assets(self) -> None:
+        assets = self._store.assets.list_all()
+        summaries: list[AssetSummaryViewModel] = []
+        options: list[tuple[str, str]] = []
+        for asset in assets:
+            session_count = len(self._store.sessions.list_for_asset(asset.asset_id))
+            summaries.append(
+                AssetSummaryViewModel(
+                    asset_id=asset.asset_id,
+                    name=asset.name,
+                    asset_type=asset.asset_type,
+                    location=asset.location,
+                    session_count_text=f"{session_count} session{'s' if session_count != 1 else ''}",
+                )
+            )
+            options.append((asset.asset_id, asset.name))
+        with self._lock:
+            selected_id = self._assets.selected_asset_id
+            if selected_id is not None and selected_id not in {a.asset_id for a in assets}:
+                selected_id = None
+            self._assets = replace(
+                self._assets,
+                assets=tuple(summaries),
+                asset_options=tuple(options),
+                selected_asset_id=selected_id,
+                status_text=(
+                    "Create an asset to start trending its measurements over time."
+                    if not summaries
+                    else f"{len(summaries)} asset{'s' if len(summaries) != 1 else ''} tracked."
+                ),
+            )
+        # Rebuild the detail view for whatever is still selected.
+        if selected_id is not None:
+            self.select_asset(selected_id)
+
+    def create_asset(
+        self,
+        name: str,
+        asset_type: str = "",
+        location: str = "",
+        notes: str = "",
+    ) -> str:
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise RuntimeError("Enter an asset name before saving.")
+        asset = Asset(
+            asset_id=f"asset-{uuid4().hex[:12]}",
+            name=clean_name,
+            asset_type=(asset_type or "").strip(),
+            location=(location or "").strip(),
+            notes=(notes or "").strip(),
+        )
+        self._store.assets.create(asset)
+        self.refresh_assets()
+        self.select_asset(asset.asset_id)
+        return asset.asset_id
+
+    def update_asset(
+        self,
+        asset_id: str,
+        name: str,
+        asset_type: str = "",
+        location: str = "",
+        notes: str = "",
+    ) -> None:
+        existing = self._store.assets.get(asset_id)
+        if existing is None:
+            raise RuntimeError("The selected asset no longer exists.")
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise RuntimeError("Enter an asset name before saving.")
+        self._store.assets.update(
+            Asset(
+                asset_id=asset_id,
+                name=clean_name,
+                asset_type=(asset_type or "").strip(),
+                location=(location or "").strip(),
+                notes=(notes or "").strip(),
+                created_at=existing.created_at,
+            )
+        )
+        self.refresh_assets()
+        self.select_asset(asset_id)
+
+    def delete_asset(self, asset_id: str) -> None:
+        self._store.assets.delete(asset_id)
+        with self._lock:
+            if self._assets.selected_asset_id == asset_id:
+                self._asset_trend_cache = None
+                self._assets = replace(
+                    self._assets,
+                    selected_asset_id=None,
+                    selected_asset_name="",
+                    selected_asset_type="",
+                    selected_asset_location="",
+                    selected_asset_notes="",
+                    linked_sessions=(),
+                    available_measurements=(),
+                    selected_measurement_id=None,
+                    trend_points=(),
+                    trend_unit_text="",
+                    trend_label_text="",
+                    detail_text="Select an asset to view its linked sessions and trend.",
+                )
+        self.refresh_assets()
+        self.refresh_recent_sessions()
+
+    def select_asset(self, asset_id: str | None) -> None:
+        if asset_id is None:
+            return
+        asset = self._store.assets.get(asset_id)
+        if asset is None:
+            return
+        sessions = self._store.sessions.list_for_asset(asset_id)
+        session_models = tuple(
+            SessionSummaryViewModel(
+                session_id=s.session_id,
+                title=s.title or s.session_id,
+                started_at_text=s.started_at.isoformat(),
+                ended_at_text=s.ended_at.isoformat() if s.ended_at else "-",
+            )
+            for s in sessions
+        )
+        trend = self._asset_trend_service.build_trend(asset_id)
+        measurements = tuple(
+            AssetTrendMeasurementViewModel(context_id=s.context_id, label=s.label, unit=s.unit)
+            for s in trend.series
+        )
+        with self._lock:
+            self._asset_trend_cache = trend
+            selected_measurement = self._assets.selected_measurement_id
+            if selected_measurement not in {m.context_id for m in measurements}:
+                selected_measurement = measurements[0].context_id if measurements else None
+            detail = (
+                f"{asset.name} - {len(sessions)} linked session(s)."
+                if sessions
+                else f"{asset.name} has no linked sessions yet."
+            )
+            self._assets = replace(
+                self._assets,
+                selected_asset_id=asset_id,
+                selected_asset_name=asset.name,
+                selected_asset_type=asset.asset_type,
+                selected_asset_location=asset.location,
+                selected_asset_notes=asset.notes,
+                linked_sessions=session_models,
+                available_measurements=measurements,
+                selected_measurement_id=selected_measurement,
+                detail_text=detail,
+            )
+            self._rebuild_asset_trend_locked()
+
+    def select_asset_measurement(self, context_id: str | None) -> None:
+        with self._lock:
+            self._assets = replace(self._assets, selected_measurement_id=context_id)
+            self._rebuild_asset_trend_locked()
+
+    def select_asset_stat(self, stat: str) -> None:
+        if stat not in {"min", "max", "avg", "median"}:
+            return
+        with self._lock:
+            self._assets = replace(self._assets, selected_stat=stat)
+            self._rebuild_asset_trend_locked()
+
+    def assign_session_asset(self, session_id: str, asset_id: str | None) -> None:
+        if session_id is None:
+            raise RuntimeError("Select a session before assigning an asset.")
+        if asset_id and self._store.assets.get(asset_id) is None:
+            raise RuntimeError("The selected asset no longer exists.")
+        self._store.sessions.assign_asset(session_id, asset_id)
+        self.refresh_recent_sessions()
+        self.refresh_assets()
+
+    def export_asset_trend_csv(self, path: str | Path, asset_id: str | None = None) -> str:
+        target = asset_id or self.assets_view_model().selected_asset_id
+        if target is None:
+            raise RuntimeError("Select an asset before exporting its trend.")
+        export_path = self._resolve_export_path(path, "asset_trend.csv")
+        exported = self._export_service.export_asset_trend_csv(target, export_path)
+        with self._lock:
+            self._assets = replace(self._assets, export_status_text=f"Trend CSV exported to {exported}")
+        return exported
+
+    def _rebuild_asset_trend_locked(self) -> None:
+        trend = self._asset_trend_cache
+        measurement_id = self._assets.selected_measurement_id
+        stat = self._assets.selected_stat
+        series = None
+        if trend is not None and measurement_id is not None:
+            series = next((s for s in trend.series if s.context_id == measurement_id), None)
+        if series is None:
+            self._assets = replace(
+                self._assets,
+                trend_points=(),
+                trend_unit_text="",
+                trend_label_text="",
+            )
+            return
+        points: list[tuple[float, float]] = []
+        for point in series.points:
+            value = point.stat(stat)
+            if value is None:
+                continue
+            x_ms = float(int(point.started_at.timestamp() * 1000))
+            points.append((x_ms, float(value)))
+        self._assets = replace(
+            self._assets,
+            trend_points=tuple(points),
+            trend_unit_text=series.unit,
+            trend_label_text=f"{series.label} ({stat})",
+        )
 
     def export_session_csv(self, path: str | Path, session_id: str | None = None) -> str:
         target = self._resolve_export_session_id(session_id)
@@ -1493,6 +1735,7 @@ class AppPresenter:
             self._session = replace(
                 self._session,
                 selected_session_id=session_id,
+                selected_session_asset_id=session.asset_id,
                 selected_context_id=selected_context_id,
                 selected_context_label=context_label,
                 selected_replay_channel=(

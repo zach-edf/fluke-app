@@ -9,10 +9,11 @@ The project uses SQLite for persisted application data.
 The shared data model includes:
 
 - recent devices
-- sessions
+- assets
+- sessions (optionally linked to an asset)
 - readings
 - markers
-- workflow runs
+- workflow runs (optionally linked to an asset)
 - workflow step results
 
 These records are used by both the desktop app and the CLI.
@@ -49,6 +50,7 @@ Commands that commonly accept `--database`:
 
 - `fluke log`
 - `fluke sessions ...`
+- `fluke assets ...`
 - `fluke workflow run`
 - `fluke debug bundle`
 
@@ -63,10 +65,27 @@ A recorded session can include:
 - tags
 - app version
 - profile id
+- optional asset id (when linked to a tracked asset)
 - start time
 - end time
 - all readings recorded during the session
 - all markers recorded during the session
+
+## What An Asset Stores
+
+A tracked asset records:
+
+- asset id
+- name
+- asset type (free text, with suggested categories)
+- location
+- notes
+- created-at timestamp
+
+Assets and their linkage were added in SQLite schema version 4. Existing
+databases upgrade automatically by adding a nullable `asset_id` column to
+`sessions` and `workflow_runs`; sessions recorded before the upgrade remain
+unassigned. See the [Assets and Trending Guide](assets-and-trending.md).
 
 ## What A Marker Stores
 
@@ -190,6 +209,30 @@ Typical desktop file name:
 
 - `live-chart.png`
 
+### Asset Trend CSV
+
+Generated from the `Assets` tab (**Export Trend CSV**).
+
+Typical desktop file name:
+
+- `asset-<ASSET_ID>-trend.csv`
+
+Shape:
+
+- one row per session per measurement group
+- columns: `asset_id`, `measurement`, `label`, `unit`, `session_id`,
+  `session_title`, `started_at`, `reading_count`, `numeric_count`, `min`, `max`,
+  `avg`, `median`
+- mixed-unit sessions are normalized to a single display unit per measurement
+
+### Asset Trend Chart PNG
+
+Generated from the `Assets` tab (**Export Trend Chart**).
+
+Typical desktop file name:
+
+- `asset-<ASSET_ID>-trend.png`
+
 ### Workflow Report Markdown
 
 Generated from the `Workflows` tab.
@@ -244,6 +287,11 @@ Use:
 - `--output`
 
 The CLI currently exposes the raw export formats only. The analysis CSV and segment summary JSON exports are desktop-only in this phase.
+
+### Asset trend export through `assets trend`
+
+Use `fluke assets trend --asset <ASSET_ID> --csv-output <PATH>` to write the asset
+trend CSV (one row per session per measurement group with min/max/avg/median).
 
 ### Workflow output
 
@@ -356,3 +404,4 @@ Remember:
 - [Desktop User Guide](desktop-guide.md)
 - [CLI Guide](cli-guide.md)
 - [Workflows Page Guide](workflows-page.md)
+- [Assets and Trending Guide](assets-and-trending.md)

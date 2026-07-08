@@ -130,6 +130,7 @@ class WorkflowRun:
     workflow_title: str | None = None
     verdict: WorkflowVerdict = WorkflowVerdict.NOT_EVALUATED
     report_meta: dict[str, str] = field(default_factory=dict)
+    asset_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

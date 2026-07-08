@@ -15,3 +15,4 @@ class Session:
     tags: list[str] = field(default_factory=list)
     app_version: str | None = None
     profile_id: str | None = None
+    asset_id: str | None = None

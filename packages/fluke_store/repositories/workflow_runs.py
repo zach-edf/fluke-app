@@ -20,8 +20,8 @@ class WorkflowRunRepository:
                 """
                 INSERT INTO workflow_runs (
                     run_id, workflow_id, session_id, started_at, ended_at, result,
-                    workflow_title, verdict, report_meta_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workflow_title, verdict, report_meta_json, asset_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     workflow_id=excluded.workflow_id,
                     session_id=excluded.session_id,
@@ -30,7 +30,8 @@ class WorkflowRunRepository:
                     result=excluded.result,
                     workflow_title=excluded.workflow_title,
                     verdict=excluded.verdict,
-                    report_meta_json=excluded.report_meta_json
+                    report_meta_json=excluded.report_meta_json,
+                    asset_id=excluded.asset_id
                 """,
                 (
                     run.run_id,
@@ -42,6 +43,7 @@ class WorkflowRunRepository:
                     run.workflow_title,
                     run.verdict.value,
                     json.dumps(run.report_meta or {}, sort_keys=True),
+                    run.asset_id,
                 ),
             )
             self._con.commit()
@@ -102,4 +104,5 @@ def _run_from_row(row: sqlite3.Row) -> WorkflowRun:
         workflow_title=row["workflow_title"],
         verdict=WorkflowVerdict(verdict_raw) if verdict_raw else WorkflowVerdict.NOT_EVALUATED,
         report_meta=report_meta,
+        asset_id=row["asset_id"] if "asset_id" in keys else None,
     )
