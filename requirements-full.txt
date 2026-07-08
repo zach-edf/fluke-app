@@ -3,3 +3,4 @@
 -r requirements-plot.txt
 -r requirements-dashboard.txt
 -r requirements-data.txt
+-r requirements-reports.txt

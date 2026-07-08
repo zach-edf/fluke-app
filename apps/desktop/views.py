@@ -1613,6 +1613,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     cancel_button.setToolTip("Cancel the running workflow")
     export_report_button = QPushButton("Export Workflow Report")
     export_report_button.setToolTip("Export the selected workflow run report as Markdown")
+    export_pdf_button = QPushButton("Export PDF Report")
+    export_pdf_button.setToolTip("Export the selected workflow run as a professional PDF job report")
 
     def on_selection_changed() -> None:
         item = workflow_list.currentItem()
@@ -1645,6 +1647,17 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
                 run_id=_selected_workflow_run_id(runtime),
             ),
             "Workflow Report",
+        )
+    )
+    export_pdf_button.clicked.connect(
+        lambda: _export_and_notify(
+            window,
+            runtime,
+            lambda: runtime.presenter.export_workflow_report_pdf(
+                _workflow_report_pdf_export_path(runtime),
+                run_id=_selected_workflow_run_id(runtime),
+            ),
+            "PDF Job Report",
         )
     )
 
@@ -1683,7 +1696,10 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     right.addWidget(report_header)
     right.addWidget(report_view)
     right.addLayout(actions)
-    right.addWidget(export_report_button)
+    report_actions = QHBoxLayout()
+    report_actions.addWidget(export_report_button)
+    report_actions.addWidget(export_pdf_button)
+    right.addLayout(report_actions)
 
     content = QHBoxLayout()
     content.addLayout(left, 2)
@@ -1707,6 +1723,7 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
             "retake_button": retake_button,
             "skip_button": skip_button, "cancel_button": cancel_button,
             "export_report_button": export_report_button,
+            "export_pdf_button": export_pdf_button,
             "list_item_cls": QListWidgetItem,
             "interaction_mode": interaction_mode,
             "capture_state": capture_state,
@@ -2118,6 +2135,7 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
     panel.refs["cancel_button"].setEnabled(workflow.is_running)
     panel.refs["note_input"].setEnabled(workflow.is_running)
     panel.refs["export_report_button"].setEnabled(workflow.selected_run_id is not None)
+    panel.refs["export_pdf_button"].setEnabled(workflow.selected_run_id is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -2275,6 +2293,11 @@ def _live_chart_export_path(runtime) -> Path:
 def _workflow_report_export_path(runtime) -> Path:
     run_id = _selected_workflow_run_id(runtime) or "workflow-run"
     return _export_directory(runtime) / f"workflow-run-{run_id}.md"
+
+
+def _workflow_report_pdf_export_path(runtime) -> Path:
+    run_id = _selected_workflow_run_id(runtime) or "workflow-run"
+    return _export_directory(runtime) / f"workflow-run-{run_id}.pdf"
 
 
 def _complete_workflow_step(runtime, note_input) -> None:

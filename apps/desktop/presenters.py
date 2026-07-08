@@ -30,6 +30,7 @@ from apps.desktop.viewmodels import (
 )
 from fluke_app import (
     ExportService,
+    ReportService,
     SessionRecorder,
     WorkflowRunner,
     build_logging_session_previews,
@@ -50,6 +51,7 @@ from fluke_core.enums import (
     WorkflowInteractionMode,
     WorkflowRunResult,
     WorkflowStepResultStatus,
+    WorkflowVerdict,
 )
 from fluke_core.models.marker import SessionMarker
 from fluke_core.models.device import DeviceInfo
@@ -883,6 +885,28 @@ class AppPresenter:
             encoding="utf-8",
         )
         return str(export_path)
+
+    def export_workflow_report_pdf(
+        self,
+        path: str | Path,
+        run_id: str | None = None,
+        *,
+        meta_overrides: dict[str, str] | None = None,
+    ) -> str:
+        target = self._resolve_export_workflow_run_id(run_id)
+        if self._store.workflow_runs.get(target) is None:
+            raise RuntimeError(f"Unknown workflow run {target!r}.")
+        if meta_overrides:
+            self._workflow_runner.set_report_meta(target, meta_overrides)
+        service = ReportService(
+            self._workflow_catalog,
+            self._store.workflow_runs,
+            self._store.workflow_step_results,
+            self._store.sessions,
+            self._store.devices,
+        )
+        export_path = self._resolve_export_path(path, f"workflow-run-{target}.pdf")
+        return service.render_workflow_report(target, export_path, meta_overrides=meta_overrides)
 
     def set_export_directory(self, path: str | Path) -> None:
         export_dir = Path(path)
@@ -2979,6 +3003,9 @@ def _workflow_step_vm(result: WorkflowStepResult, definition: WorkflowDefinition
         status_text = "Skipped"
     else:
         status_text = "Completed"
+    verdict_label = _workflow_verdict_label(result.verdict)
+    if verdict_label:
+        status_text = f"{status_text} · {verdict_label}"
     detail = _workflow_result_detail(result)
     return WorkflowStepViewModel(
         step_id=result.step_id,
@@ -2989,15 +3016,27 @@ def _workflow_step_vm(result: WorkflowStepResult, definition: WorkflowDefinition
     )
 
 
+def _workflow_verdict_label(verdict: WorkflowVerdict) -> str:
+    return {
+        WorkflowVerdict.PASS: "PASS",
+        WorkflowVerdict.FAIL: "FAIL",
+        WorkflowVerdict.NOT_EVALUATED: "",
+    }.get(verdict, "")
+
+
 def _workflow_run_vm(run: WorkflowRun) -> WorkflowRunSummaryViewModel:
     started = run.started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    result_text = run.result.value.replace("_", " ").title()
+    verdict_label = _workflow_verdict_label(run.verdict)
+    if verdict_label:
+        result_text = f"{result_text} · {verdict_label}"
     return WorkflowRunSummaryViewModel(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
         title=run.workflow_title or run.workflow_id,
         session_id=run.session_id,
         started_at_text=started,
-        result_text=run.result.value.replace("_", " ").title(),
+        result_text=result_text,
     )
 
 
@@ -3012,7 +3051,9 @@ def _workflow_run_summary_text(
     title = run.workflow_title or run.workflow_id
     session_label = run.session_id if not session_title or session_title == run.session_id else f"{session_title} ({run.session_id})"
     active_suffix = " | Active run" if viewing_active and run.result == WorkflowRunResult.IN_PROGRESS else ""
-    return f"Viewing run: {title} | {started} | {result_text} | Session {session_label}{active_suffix}"
+    verdict_label = _workflow_verdict_label(run.verdict)
+    verdict_suffix = f" | Verdict {verdict_label}" if verdict_label else ""
+    return f"Viewing run: {title} | {started} | {result_text}{verdict_suffix} | Session {session_label}{active_suffix}"
 
 
 def _workflow_definition_report_text(definition: WorkflowDefinition) -> str:
@@ -3083,6 +3124,7 @@ def _workflow_report_text(
     completed_count = sum(1 for result in results if result.status == WorkflowStepResultStatus.COMPLETED)
     skipped_count = sum(1 for result in results if result.status == WorkflowStepResultStatus.SKIPPED)
 
+    overall_verdict = _workflow_verdict_label(run.verdict) or "Not evaluated"
     lines = [
         "Workflow Report",
         "===============",
@@ -3090,6 +3132,7 @@ def _workflow_report_text(
         f"Run ID: {run.run_id}",
         f"Workflow ID: {run.workflow_id}",
         f"Result: {result_text}",
+        f"Overall Verdict: {overall_verdict}",
         f"Session: {session_label}",
         f"Started: {started}",
         f"Ended: {ended}",
@@ -3116,6 +3159,11 @@ def _workflow_report_text(
         lines.append(f"   Completed: {result.completed_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
         if result.reading is not None:
             lines.append(f"   Reading: {result.reading.display_text}")
+        verdict_label = _workflow_verdict_label(result.verdict)
+        if verdict_label:
+            lines.append(f"   Verdict: {verdict_label}")
+            if result.verdict_detail:
+                lines.append(f"   Limit check: {result.verdict_detail}")
         if result.note:
             lines.append(f"   Note: {result.note}")
         lines.append("")
