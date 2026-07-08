@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     ended_at TEXT,
     result TEXT NOT NULL,
     workflow_title TEXT,
+    verdict TEXT NOT NULL DEFAULT 'not_evaluated',
+    report_meta_json TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
@@ -87,6 +89,8 @@ CREATE TABLE IF NOT EXISTS workflow_step_results (
     status TEXT NOT NULL,
     note TEXT,
     reading_json TEXT,
+    verdict TEXT NOT NULL DEFAULT 'not_evaluated',
+    verdict_detail TEXT,
     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
 );
 

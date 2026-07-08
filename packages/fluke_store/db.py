@@ -38,6 +38,10 @@ def initialize(con: sqlite3.Connection) -> None:
     _ensure_column(con, "readings", "source_device_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "mode", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "readings", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(con, "workflow_runs", "verdict", "TEXT NOT NULL DEFAULT 'not_evaluated'")
+    _ensure_column(con, "workflow_runs", "report_meta_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(con, "workflow_step_results", "verdict", "TEXT NOT NULL DEFAULT 'not_evaluated'")
+    _ensure_column(con, "workflow_step_results", "verdict_detail", "TEXT")
     con.commit()
 
 

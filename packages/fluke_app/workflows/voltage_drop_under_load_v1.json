@@ -1,0 +1,63 @@
+{
+  "workflow_id": "voltage_drop_under_load_v1",
+  "title": "Voltage Drop Under Load",
+  "description": "Measure circuit voltage with no load and under load to quantify voltage drop against a percent-drop limit.",
+  "category": "Power Quality",
+  "schema_version": 2,
+  "estimated_duration_min": 6,
+  "tags": [
+    "voltage",
+    "voltage-drop",
+    "load",
+    "power-quality"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: Verify the meter and leads are rated for the circuit (CAT rating and voltage). Inspect leads for damage. Measure at the point of use (receptacle or equipment terminals), not just at the panel.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record circuit ID, breaker size, and conductor gauge/length if known."
+    },
+    {
+      "id": "measure_no_load_voltage",
+      "title": "Measure No-Load Voltage",
+      "instruction": "With the load OFF, set the meter to AC voltage and measure the circuit voltage at the point of use. Capture the no-load reference voltage.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 100,
+        "max": 264,
+        "unit": "V",
+        "description": "Sanity band covering 120 V and 240 V nominal circuits."
+      },
+      "note_prompt": "Record the no-load voltage."
+    },
+    {
+      "id": "measure_loaded_voltage",
+      "title": "Measure Loaded Voltage",
+      "instruction": "Turn the load ON and let it stabilize. Measure the voltage again at the same point. Capture the loaded voltage. Voltage drop under full load should stay within about 5% of the no-load value (NEC recommends max 3% branch / 5% total).",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "reference_step_id": "measure_no_load_voltage",
+        "relative_mode": "percent_drop",
+        "percent": 5,
+        "unit": "V",
+        "description": "Loaded voltage must not sag more than 5% below the no-load reference."
+      },
+      "note_prompt": "Note the load applied and observed drop."
+    },
+    {
+      "id": "record_findings",
+      "title": "Record Findings",
+      "instruction": "Document the result. Excessive drop may indicate undersized conductors, loose terminations, or an overloaded circuit.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize likely causes if the drop is excessive."
+    }
+  ]
+}

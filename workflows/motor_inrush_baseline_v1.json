@@ -1,0 +1,65 @@
+{
+  "workflow_id": "motor_inrush_baseline_v1",
+  "title": "Motor Inrush Baseline",
+  "description": "Capture a repeatable running-current and startup inrush baseline for a motor using the clamp and inrush function.",
+  "category": "Motors",
+  "schema_version": 2,
+  "estimated_duration_min": 8,
+  "tags": [
+    "motor",
+    "inrush",
+    "current",
+    "baseline"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: Confirm you are qualified for this circuit and wearing appropriate PPE. Verify the clamp is rated for the circuit voltage. Clamp a single conductor only. Keep hands behind the tactile barrier.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record motor nameplate HP, voltage, and FLA."
+    },
+    {
+      "id": "measure_running_current",
+      "title": "Measure Running Current",
+      "instruction": "With the motor running at steady load, set the meter to AC current and clamp one phase conductor. Capture the steady running current.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "current_ac",
+      "expected_unit": "A",
+      "acceptance": {
+        "min": 0.1,
+        "max": 200,
+        "unit": "A",
+        "description": "Sanity band for a single-phase clamp on one conductor; adjust per nameplate FLA."
+      },
+      "note_prompt": "Note the running current against nameplate FLA."
+    },
+    {
+      "id": "measure_inrush",
+      "title": "Capture Startup Inrush",
+      "instruction": "Set the meter to the INRUSH function, keep the clamp on the same conductor, then start the motor. The meter latches the startup inrush current. Capture the latched inrush value.",
+      "interaction_mode": "countdown_capture",
+      "capture": true,
+      "capture_settings": {
+        "countdown_s": 3.0
+      },
+      "expected_measurement_type": "current_inrush",
+      "expected_unit": "A",
+      "acceptance": {
+        "min": 0.1,
+        "max": 1500,
+        "unit": "A",
+        "description": "Records inrush baseline; wide sanity band. Typical inrush is 5-8x running current."
+      },
+      "note_prompt": "Record inrush and the approximate inrush-to-running ratio."
+    },
+    {
+      "id": "record_baseline",
+      "title": "Record Baseline",
+      "instruction": "Note ambient conditions, load state, and any abnormal sounds so this baseline can be compared on future visits.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize the motor baseline condition."
+    }
+  ]
+}

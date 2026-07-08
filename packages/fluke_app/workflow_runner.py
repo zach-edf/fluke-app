@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from fluke_app.ports import WorkflowRunRepository, WorkflowStepResultRepository
 from fluke_app.workflow_catalog import WorkflowCatalog
-from fluke_core.enums import WorkflowRunResult, WorkflowStepResultStatus
+from fluke_core.enums import WorkflowRunResult, WorkflowStepResultStatus, WorkflowVerdict
 from fluke_core.models.reading import Reading
 from fluke_core.models.workflow import WorkflowRun, WorkflowRunState, WorkflowStep, WorkflowStepResult
+from fluke_core.services.thresholds import combine_run_verdict, evaluate_step
 
 
 class WorkflowRunner:
@@ -74,6 +75,20 @@ class WorkflowRunner:
         if step.requires_reading:
             reading = self.validate_reading_for_step(step, latest_reading)
             status = WorkflowStepResultStatus.CAPTURED
+        elif step.is_capture_step and latest_reading is not None:
+            # Legacy capture steps (capture=True without an explicit capture mode)
+            # still record and evaluate the supplied reading.
+            reading = latest_reading
+            status = WorkflowStepResultStatus.CAPTURED
+
+        verdict = WorkflowVerdict.NOT_EVALUATED
+        verdict_detail: str | None = None
+        if step.has_acceptance:
+            reference_values = self._reference_values(state)
+            value = reading.value if reading is not None else None
+            evaluation = evaluate_step(step, value, reference_values)
+            verdict = evaluation.verdict
+            verdict_detail = evaluation.detail
 
         result = WorkflowStepResult(
             run_id=state.run.run_id,
@@ -83,6 +98,8 @@ class WorkflowRunner:
             status=status,
             note=note,
             reading=reading,
+            verdict=verdict,
+            verdict_detail=verdict_detail,
         )
         self._step_result_repo.append(result)
         return self._reload_and_finalize(state.run.run_id)
@@ -114,6 +131,26 @@ class WorkflowRunner:
         stored = self._run_repo.update(run)
         self._active_run_id = None
         return stored
+
+    def set_report_meta(self, run_id: str, meta: dict[str, str]) -> WorkflowRun | None:
+        run = self._run_repo.get(run_id)
+        if run is None:
+            return None
+        merged = dict(run.report_meta)
+        for key, value in meta.items():
+            if value is None or value == "":
+                merged.pop(key, None)
+            else:
+                merged[key] = str(value)
+        run.report_meta = merged
+        return self._run_repo.update(run)
+
+    def _reference_values(self, state: WorkflowRunState) -> dict[str, float | None]:
+        values: dict[str, float | None] = {}
+        for prior in state.completed_steps:
+            if prior.reading is not None:
+                values[prior.step_id] = prior.reading.value
+        return values
 
     def list_recent_runs(self, limit: int = 10) -> list[WorkflowRun]:
         return self._run_repo.list_recent(limit=limit)
@@ -149,9 +186,14 @@ class WorkflowRunner:
         if definition is None:
             raise RuntimeError(f"Unknown workflow definition {run.workflow_id!r}.")
         completed = tuple(self._step_result_repo.list_for_run(run_id))
+        run_verdict = combine_run_verdict([result.verdict for result in completed])
         if len(completed) >= len(definition.steps) and run.result == WorkflowRunResult.IN_PROGRESS:
             run.ended_at = completed[-1].completed_at if completed else datetime.now(timezone.utc)
             run.result = WorkflowRunResult.COMPLETED
+            run.verdict = run_verdict
             run = self._run_repo.update(run)
             self._active_run_id = None
+        elif run.verdict != run_verdict:
+            run.verdict = run_verdict
+            run = self._run_repo.update(run)
         return WorkflowRunState(definition=definition, run=run, completed_steps=completed)

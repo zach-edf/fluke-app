@@ -14,6 +14,7 @@ from fluke_app.device_logging import (
     write_logging_config,
 )
 from fluke_app.export_service import ExportService
+from fluke_app.report_service import ReportService
 from fluke_app.session_recorder import SessionRecorder, new_session
 from fluke_app.workflow_catalog import WorkflowCatalog, default_workflow_directory, load_workflow_catalog
 from fluke_app.workflow_runner import WorkflowRunner
@@ -28,6 +29,7 @@ __all__ = [
     "ExportService",
     "LOGGING_VALUE_SOURCES",
     "ReadingStreamService",
+    "ReportService",
     "SessionRecorder",
     "build_logging_session_previews",
     "clear_logging_data",

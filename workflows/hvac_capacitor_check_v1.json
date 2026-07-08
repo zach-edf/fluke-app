@@ -1,0 +1,45 @@
+{
+  "workflow_id": "hvac_capacitor_check_v1",
+  "title": "HVAC Capacitor Check",
+  "description": "Verify a run/start capacitor's measured capacitance against its nameplate rating within the typical +/-6% tolerance.",
+  "category": "HVAC",
+  "schema_version": 2,
+  "estimated_duration_min": 6,
+  "tags": [
+    "hvac",
+    "capacitor",
+    "capacitance"
+  ],
+  "steps": [
+    {
+      "id": "safety_discharge",
+      "title": "Safety And Discharge",
+      "instruction": "SAFETY: De-energize and lock out the equipment. Capacitors store a lethal charge - discharge the capacitor across a proper resistor (not a screwdriver) and verify 0 V before touching terminals. Disconnect the capacitor leads before measuring.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record the nameplate rating (uF) printed on the capacitor."
+    },
+    {
+      "id": "measure_capacitance",
+      "title": "Measure Capacitance",
+      "instruction": "Set the meter to capacitance. Connect across the disconnected capacitor terminals (for a dual-run cap, test HERM and FAN each against C). Capture the measured value. The acceptance band below is set for a common 45 uF nameplate at +/-6% - adjust the workflow for other ratings.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "capacitance",
+      "expected_unit": "uF",
+      "acceptance": {
+        "min": 42.3,
+        "max": 47.7,
+        "unit": "uF",
+        "description": "45 uF nameplate +/-6% (42.3 to 47.7 uF)."
+      },
+      "note_prompt": "Record measured uF for each section tested."
+    },
+    {
+      "id": "record_result",
+      "title": "Record Result",
+      "instruction": "Document pass/fail. A capacitor reading below tolerance is weak and should be replaced; a bulging case or short is an immediate failure.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Note replacement recommendation if out of tolerance."
+    }
+  ]
+}

@@ -64,3 +64,11 @@ class WorkflowInteractionMode(str, Enum):
     STABLE_CAPTURE = "stable_capture"
     COUNTDOWN_CAPTURE = "countdown_capture"
     OBSERVE_AND_CONFIRM = "observe_and_confirm"
+
+
+class WorkflowVerdict(str, Enum):
+    """Pass/fail verdict for a workflow step result or an overall run."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    NOT_EVALUATED = "not_evaluated"

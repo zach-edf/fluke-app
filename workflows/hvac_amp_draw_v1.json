@@ -1,0 +1,60 @@
+{
+  "workflow_id": "hvac_amp_draw_v1",
+  "title": "HVAC Amp Draw vs Nameplate",
+  "description": "Measure blower and compressor running current with the clamp and compare against nameplate FLA/RLA limits.",
+  "category": "HVAC",
+  "schema_version": 2,
+  "estimated_duration_min": 8,
+  "tags": [
+    "hvac",
+    "current",
+    "amp-draw",
+    "nameplate"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: Confirm PPE and that the clamp is rated for the circuit voltage. Record nameplate FLA (blower/fan) and RLA (compressor). Clamp one conductor at a time. The absolute limits below are typical residential defaults - update them to the unit's nameplate.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record blower FLA and compressor RLA from the nameplate."
+    },
+    {
+      "id": "measure_blower_amps",
+      "title": "Measure Blower/Fan Amps",
+      "instruction": "With the blower running, set the meter to AC current and clamp the blower motor conductor. Capture the running current. It should not exceed the fan motor nameplate FLA.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "current_ac",
+      "expected_unit": "A",
+      "acceptance": {
+        "max": 6.0,
+        "unit": "A",
+        "description": "Default residential blower FLA limit; set to the unit nameplate FLA."
+      },
+      "note_prompt": "Record blower amps vs nameplate FLA."
+    },
+    {
+      "id": "measure_compressor_amps",
+      "title": "Measure Compressor Amps",
+      "instruction": "With the compressor running at steady state, clamp the compressor conductor and capture the running current. It should not exceed the compressor nameplate RLA.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "current_ac",
+      "expected_unit": "A",
+      "acceptance": {
+        "max": 30.0,
+        "unit": "A",
+        "description": "Default residential compressor RLA limit; set to the unit nameplate RLA."
+      },
+      "note_prompt": "Record compressor amps vs nameplate RLA."
+    },
+    {
+      "id": "record_result",
+      "title": "Record Result",
+      "instruction": "Document the readings. Amps above nameplate indicate a mechanical, electrical, or refrigerant-charge problem and should be investigated.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize findings and next steps."
+    }
+  ]
+}

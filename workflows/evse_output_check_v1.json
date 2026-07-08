@@ -1,0 +1,62 @@
+{
+  "workflow_id": "evse_output_check_v1",
+  "title": "EV Charger (EVSE) Output Check",
+  "description": "Verify Level 2 EVSE output voltage and delivered current are within expected limits during a charging session.",
+  "category": "EV Charging",
+  "schema_version": 2,
+  "estimated_duration_min": 8,
+  "tags": [
+    "ev",
+    "evse",
+    "voltage",
+    "current"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: EVSE circuits are 208-240 V and high current. Confirm PPE and CAT rating. Only access live terminals if qualified; prefer measuring at the equipment disconnect. Never clamp or probe inside the connector handle.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record EVSE model, rated output amps, and supply breaker size."
+    },
+    {
+      "id": "measure_output_voltage",
+      "title": "Measure Output Voltage",
+      "instruction": "With the EVSE energized, set the meter to AC voltage and measure line-to-line output voltage at the supply terminals. Capture the reading. A 240 V nominal supply should sit roughly between 208 V and 264 V.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 200,
+        "max": 264,
+        "unit": "V",
+        "description": "208-240 V nominal EVSE supply, allowing +10% high limit."
+      },
+      "note_prompt": "Record measured output voltage."
+    },
+    {
+      "id": "measure_charge_current",
+      "title": "Measure Charging Current",
+      "instruction": "Start a charging session and let it ramp to steady state. Clamp one supply conductor and capture the delivered AC current. It should not exceed the EVSE rated output current.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "current_ac",
+      "expected_unit": "A",
+      "acceptance": {
+        "min": 1.0,
+        "max": 48,
+        "unit": "A",
+        "description": "Typical Level 2 EVSE output up to 48 A continuous; set max to the EVSE rating."
+      },
+      "note_prompt": "Record steady-state charging current vs the EVSE rating."
+    },
+    {
+      "id": "record_result",
+      "title": "Record Result",
+      "instruction": "Document the session. Low or unstable voltage under load, or current well below rating, may indicate supply or EVSE derating issues.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize the EVSE output condition."
+    }
+  ]
+}
