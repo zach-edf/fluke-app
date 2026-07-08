@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -96,3 +97,80 @@ def load_extensions():
 
 def build_workflows():
     return build_workflow_catalog()
+
+
+# ---------------------------------------------------------------------------
+# Spoken readings (TTS) CLI wiring
+# ---------------------------------------------------------------------------
+
+def add_speech_arguments(parser: argparse.ArgumentParser) -> None:
+    """Attach --speak / --speak-interval / --speak-mode to a command parser."""
+    parser.add_argument("--speak", action="store_true", help="Announce readings aloud using platform TTS")
+    parser.add_argument(
+        "--speak-mode",
+        choices=["interval", "on_stable", "on_change", "on_alert"],
+        default="interval",
+        help="When to speak readings (default: interval)",
+    )
+    parser.add_argument("--speak-interval", type=float, default=10.0, help="Seconds between spoken readings in interval mode")
+    parser.add_argument("--speak-delta", type=float, default=1.0, help="Minimum change to announce in on_change mode")
+
+
+def build_speech_service(args: argparse.Namespace):
+    """Return a configured SpeechService if --speak was requested, else None."""
+    if not getattr(args, "speak", False):
+        return None
+    from fluke_app import SpeechConfig, SpeechMode, SpeechService
+
+    config = SpeechConfig(
+        enabled=True,
+        mode=SpeechMode(getattr(args, "speak_mode", "interval")),
+        interval_seconds=getattr(args, "speak_interval", 10.0),
+        change_delta=getattr(args, "speak_delta", 1.0),
+        speak_alerts=True,
+    )
+    service = SpeechService(config)
+    if not service.is_available():
+        print(
+            "Warning: no platform text-to-speech engine found; --speak has no effect.",
+            file=sys.stderr,
+        )
+    return service
+
+
+# ---------------------------------------------------------------------------
+# MQTT publishing CLI wiring
+# ---------------------------------------------------------------------------
+
+def add_mqtt_arguments(parser: argparse.ArgumentParser) -> None:
+    """Attach MQTT broker options to a command parser."""
+    parser.add_argument("--mqtt-host", default=None, help="MQTT broker host; enables MQTT publishing when set")
+    parser.add_argument("--mqtt-port", type=int, default=1883, help="MQTT broker port (default: 1883)")
+    parser.add_argument("--mqtt-username", default=None, help="MQTT username")
+    parser.add_argument("--mqtt-password", default=None, help="MQTT password")
+    parser.add_argument("--mqtt-tls", action="store_true", help="Use TLS for the MQTT connection")
+    parser.add_argument("--mqtt-topic", default="fluke", help="MQTT base topic (default: fluke)")
+    parser.add_argument("--mqtt-qos", type=int, default=0, choices=[0, 1, 2], help="MQTT QoS level (default: 0)")
+    parser.add_argument("--mqtt-retain", action="store_true", help="Set the retain flag on published readings")
+    parser.add_argument("--mqtt-no-discovery", action="store_true", help="Disable Home Assistant MQTT discovery")
+
+
+def build_mqtt_publisher(args: argparse.Namespace):
+    """Return an MqttPublisher if --mqtt-host was given, else None."""
+    host = getattr(args, "mqtt_host", None)
+    if not host:
+        return None
+    from fluke_app import MqttConfig, MqttPublisher
+
+    config = MqttConfig(
+        host=host,
+        port=getattr(args, "mqtt_port", 1883),
+        username=getattr(args, "mqtt_username", None),
+        password=getattr(args, "mqtt_password", None),
+        use_tls=getattr(args, "mqtt_tls", False),
+        base_topic=getattr(args, "mqtt_topic", "fluke"),
+        qos=getattr(args, "mqtt_qos", 0),
+        retain=getattr(args, "mqtt_retain", False),
+        discovery=not getattr(args, "mqtt_no_discovery", False),
+    )
+    return MqttPublisher(config)

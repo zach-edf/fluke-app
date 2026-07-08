@@ -1,7 +1,11 @@
 """Stream readings with threshold-based alerts.
 
 Prints each reading and triggers a visual + audible alert (bell)
-when the value crosses the configured high or low threshold.
+when the value crosses configured thresholds, the meter reports an
+out-of-band status, or the connection drops.
+
+Alarm logic lives in the shared ``AlertEvaluator`` service so the CLI and the
+desktop app behave identically.
 
 Activated via: fluke alert --device <id> --high 120 --low 10
 """
@@ -13,7 +17,13 @@ import asyncio
 import sys
 
 from apps.cli.formatters import format_reading, nonneg_float
-from apps.cli.runtime import attach_connection_diagnostics, build_device_manager
+from apps.cli.runtime import (
+    attach_connection_diagnostics,
+    build_device_manager,
+    build_speech_service,
+    add_speech_arguments,
+)
+from fluke_app import AlertConfig, AlertEvaluator, AlertKind
 from fluke_core.models.reading import Reading
 
 
@@ -33,15 +43,34 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to use")
     parser.add_argument("--high", type=float, default=None, help="Alert when reading exceeds this value")
     parser.add_argument("--low", type=float, default=None, help="Alert when reading drops below this value")
+    parser.add_argument(
+        "--debounce",
+        type=nonneg_float,
+        default=0.0,
+        help="Require the value to stay out of band for N seconds before alerting",
+    )
+    parser.add_argument("--no-status-alerts", action="store_false", dest="status_alerts", default=True, help="Do not alert on over-range/no-signal status")
     parser.add_argument("--duration", type=nonneg_float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
     parser.add_argument("--bell", action="store_true", default=True, help="Sound terminal bell on alert (default: on)")
     parser.add_argument("--no-bell", action="store_false", dest="bell", help="Disable terminal bell")
+    add_speech_arguments(parser)
     parser.set_defaults(func=handle)
 
 
 async def handle(args: argparse.Namespace) -> int:
-    if args.high is None and args.low is None:
+    if args.high is None and args.low is None and not args.status_alerts:
         print("Warning: no thresholds set. Use --high and/or --low to enable alerts.", file=sys.stderr)
+
+    evaluator = AlertEvaluator(
+        AlertConfig(
+            high=args.high,
+            low=args.low,
+            debounce_seconds=args.debounce,
+            status_alerts=args.status_alerts,
+            connection_alerts=True,
+        )
+    )
+    speech = build_speech_service(args)
 
     manager = build_device_manager()
     attach_connection_diagnostics(manager)
@@ -51,29 +80,25 @@ async def handle(args: argparse.Namespace) -> int:
 
     def on_reading(reading: Reading) -> None:
         nonlocal alert_count
-        is_alert = False
-        alert_reason = ""
-
-        if reading.value is not None:
-            if args.high is not None and reading.value > args.high:
-                is_alert = True
-                alert_reason = f"HIGH ({reading.value:.4g} > {args.high:.4g})"
-            elif args.low is not None and reading.value < args.low:
-                is_alert = True
-                alert_reason = f"LOW ({reading.value:.4g} < {args.low:.4g})"
-
+        evaluation = evaluator.evaluate(reading)
         line = format_reading(reading)
 
-        if is_alert:
-            alert_count += 1
-            prefix = f"{_BOLD}{_RED}ALERT {alert_reason}{_RESET} "
-            bell = "\a" if args.bell else ""
+        if evaluation.active:
+            if evaluation.just_triggered:
+                alert_count += 1
+                if speech is not None:
+                    speech.speak_alert(evaluation.message)
+            reason = evaluation.message.split(":", 1)[0] if ":" in evaluation.message else evaluation.kind.value.upper()
+            prefix = f"{_BOLD}{_RED}ALERT {reason}{_RESET} "
+            bell = "\a" if (args.bell and evaluation.just_triggered) else ""
             print(f"{bell}{prefix}{line}")
         else:
-            print(f"{_GREEN}\u2713{_RESET} {line}")
+            print(f"{_GREEN}✓{_RESET} {line}")
+            if speech is not None:
+                speech.on_reading(reading)
 
     manager.subscribe_readings(on_reading)
-    manager.subscribe_disconnects(lambda: _handle_disconnect(manager, finished, _set_terminal_error))
+    manager.subscribe_disconnects(lambda: _handle_disconnect(manager, evaluator, finished, _set_terminal_error))
 
     def _set_terminal_error(message: str) -> None:
         nonlocal terminal_error
@@ -84,7 +109,9 @@ async def handle(args: argparse.Namespace) -> int:
         thresholds.append(f"low={args.low}")
     if args.high is not None:
         thresholds.append(f"high={args.high}")
-    threshold_text = ", ".join(thresholds) if thresholds else "none"
+    if args.debounce:
+        thresholds.append(f"debounce={args.debounce}s")
+    threshold_text = ", ".join(thresholds) if thresholds else "status only"
 
     print(f"Connecting to {args.device}...", file=sys.stderr)
     await manager.establish_session(args.device, profile_id=args.profile)
@@ -108,7 +135,9 @@ async def handle(args: argparse.Namespace) -> int:
     return 0
 
 
-def _handle_disconnect(manager, finished: asyncio.Event, set_message) -> None:
+def _handle_disconnect(manager, evaluator: AlertEvaluator, finished: asyncio.Event, set_message) -> None:
     status = manager.latest_connection_diagnostics()
-    set_message("" if status is None else (status.last_error_text or status.message))
+    detail = "" if status is None else (status.last_error_text or status.message)
+    evaluator.note_connection_lost(detail)
+    set_message(detail)
     finished.set()

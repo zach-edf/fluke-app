@@ -43,6 +43,7 @@ class FlukeClient:
         self._latest: Reading | None = None
         self._stream_started = False
         self._last_connection_error: str | None = None
+        self._publisher: object | None = None
         self._manager.subscribe_readings(self._handle_reading)
         self._manager.subscribe_disconnects(self._handle_terminal_disconnect)
 
@@ -55,10 +56,27 @@ class FlukeClient:
         self._last_connection_error = None
         device = await self._manager.establish_session(device_id, profile_id=profile_id)
         self._stream_started = True
+        if self._publisher is not None:
+            self._publisher.connect(device.device_id, device=device)  # type: ignore[attr-defined]
         return device
+
+    def attach_publisher(self, publisher: object) -> None:
+        """Attach a reading publisher (e.g. ``MqttPublisher``).
+
+        The publisher must expose ``connect(device_id, device=...)``,
+        ``publish_reading(reading)``, and ``disconnect()``. It receives every
+        reading and its connection lifecycle is tied to the client's.
+        """
+        self._publisher = publisher
+        self._manager.subscribe_readings(publisher.publish_reading)  # type: ignore[attr-defined]
 
     async def disconnect(self) -> None:
         await self._manager.disconnect()
+        if self._publisher is not None:
+            try:
+                self._publisher.disconnect()  # type: ignore[attr-defined]
+            except Exception:
+                pass
         await self._queue.put(_SENTINEL)
 
     def state(self) -> ConnectionState:
