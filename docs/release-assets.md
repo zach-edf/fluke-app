@@ -2,6 +2,31 @@
 
 This guide tracks the screenshots and packaging-facing assets that should stay current as the desktop UI evolves.
 
+## Packaged Installer Artifacts
+
+Releases ship prebuilt desktop installers so non-technical users can install
+without Python. These are produced automatically by
+`.github/workflows/release.yml` on a `v*` tag push and attached to the GitHub
+Release:
+
+- `FlukeCommunity-<version>-Setup.exe` — Windows Inno Setup installer
+- `FlukeCommunity-windows.zip` — Windows one-dir bundle (portable, no installer)
+- `FlukeCommunity-<version>.dmg` — macOS disk image (drag to Applications)
+
+Build tooling and local build instructions live in
+[`packaging/`](../packaging/README.md). The Windows path is verified locally;
+the macOS path is CI-validated only until someone runs it on a Mac. Each CI
+build runs `packaging/smoke_test.py`, which launches the packaged binary with
+`--self-test` and fails the release if startup does not exit cleanly.
+
+Notes for maintainers:
+
+- The macOS build is currently unsigned / un-notarized. Document the
+  right-click → **Open** first-launch step in release notes until signing is added.
+- Update the `AppVersion` in `packaging/windows/installer.iss`, the version in
+  `packaging/macos/build_macos.sh`, and `pyproject.toml` together when cutting a
+  release.
+
 ## Current Audit
 
 The written docs are mostly up to date, but the screenshot set is no longer representative of the current desktop app.
@@ -121,6 +146,8 @@ Before cutting a release:
 3. Confirm the `Session` screenshot includes the device-memory browser, since that is now a headline feature.
 4. Confirm the `Settings` screenshot includes diagnostics/device info, since the tab is no longer just theme/export controls.
 5. If advanced clamp support is being advertised publicly, capture one dual-reading screenshot before release.
+6. Bump the version in `pyproject.toml`, `packaging/windows/installer.iss`, and `packaging/macos/build_macos.sh` so the installer artifacts are named correctly.
+7. Push the `v<version>` tag and confirm the `Release` workflow built, smoke-tested, and attached the Windows and macOS installers.
 
 ## Screenshot Generation Script
 

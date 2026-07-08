@@ -28,3 +28,6 @@ fluke_community.egg-info/
 !docs/fluke-app-screenshots/
 !docs/fluke-app-screenshots/*.png
 artifacts/
+# PyInstaller / packaging build outputs
+build/
+dist/

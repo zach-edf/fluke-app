@@ -1,0 +1,105 @@
+name: Release
+
+# Build packaged desktop installers for Windows and macOS on tag push and
+# attach them to a GitHub Release. Tag with e.g. `v0.1.0`.
+on:
+  push:
+    tags:
+      - "v*"
+  # Allow a dry run (build + smoke test, no Release publish) from the Actions UI.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install pyinstaller
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build bundle + installer (includes smoke test)
+        shell: pwsh
+        run: pwsh packaging/windows/build_windows.ps1
+
+      - name: Package one-dir build as zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/FlukeCommunity/* -DestinationPath dist/FlukeCommunity-windows.zip -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            dist/FlukeCommunity-windows.zip
+            dist/installer/*.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS dmg
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install pyinstaller
+
+      - name: Build .app + .dmg (includes smoke test)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: bash packaging/macos/build_macos.sh
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    # Only publish a Release on an actual tag push, not on manual dry runs.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/windows-artifacts/*
+            artifacts/macos-artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false

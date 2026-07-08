@@ -48,6 +48,30 @@ Desktop app requirements:
 
 ## Choosing The Right Install
 
+### Packaged installer (no Python required)
+
+If you are an end user (for example a tradesperson) who just wants the desktop
+app, use a prebuilt installer instead of the Python paths below. You do not need
+Python, a virtual environment, or the command line.
+
+1. Go to the project's [Releases](../../releases) page.
+2. Download the asset for your platform:
+   - Windows: `FlukeCommunity-<version>-Setup.exe`
+   - macOS: `FlukeCommunity-<version>.dmg`
+3. Install and launch:
+   - Windows: run the setup executable (per-user install, no admin rights) and
+     start `Fluke Community` from the Start menu.
+   - macOS: open the `.dmg`, drag `Fluke Community` into `Applications`, then
+     right-click the app and choose **Open** the first time (the build is not
+     yet code-signed).
+
+The database and exports still live in the standard per-user locations described
+in [Where Data Goes](#where-data-goes).
+
+The Python-based installs below are for developers, contributors, and anyone who
+also wants the CLI or SDK. Maintainers building the installers should read
+[../packaging/README.md](../packaging/README.md).
+
 ### Full install
 
 Use this if you want:

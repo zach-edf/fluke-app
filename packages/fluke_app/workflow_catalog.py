@@ -13,6 +13,7 @@ from fluke_core.models.workflow import (
     WorkflowDefinition,
     WorkflowStep,
 )
+from fluke_core.paths import bundled_data_dir
 
 
 class WorkflowValidationError(ValueError):
@@ -38,6 +39,9 @@ class WorkflowCatalog:
 
 
 def default_workflow_directory() -> Path:
+    bundled = bundled_data_dir("workflows")
+    if bundled is not None:
+        return bundled
     return Path(__file__).resolve().parents[2] / "workflows"
 
 
@@ -63,16 +67,20 @@ def load_workflow_catalog(
 def _load_builtin_definitions() -> list[WorkflowDefinition]:
     try:
         root = resources.files("fluke_app.workflows")
-    except ModuleNotFoundError:
-        root_path = default_workflow_directory()
-        if not root_path.exists():
-            return []
-        return [_load_definition(file_path) for file_path in sorted(root_path.glob("*.json"))]
-    definitions: list[WorkflowDefinition] = []
-    for item in sorted(root.iterdir(), key=lambda candidate: candidate.name):
-        if item.name.endswith(".json"):
-            definitions.append(_load_definition_from_text(item.read_text(encoding="utf-8")))
-    return definitions
+        definitions: list[WorkflowDefinition] = []
+        for item in sorted(root.iterdir(), key=lambda candidate: candidate.name):
+            if item.name.endswith(".json"):
+                definitions.append(_load_definition_from_text(item.read_text(encoding="utf-8")))
+        if definitions:
+            return definitions
+    except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError):
+        pass
+    # Fallback for packaged builds where importlib.resources cannot enumerate
+    # the collected package data: read from the bundled/source workflows dir.
+    root_path = default_workflow_directory()
+    if not root_path.exists():
+        return []
+    return [_load_definition(file_path) for file_path in sorted(root_path.glob("*.json"))]
 
 
 def _load_definition(path: Path) -> WorkflowDefinition:
