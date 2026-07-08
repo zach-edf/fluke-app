@@ -111,6 +111,8 @@ Options:
 - `--duration`
 - `--count`
 - `--dashboard`
+- `--speak` and speech options (see [Spoken readings](#spoken-readings-tts))
+- `--mqtt-host` and MQTT options (see [MQTT publishing](#mqtt-publishing))
 
 Examples:
 
@@ -118,6 +120,8 @@ Examples:
 fluke stream --device "<DEVICE_ID>" --count 25
 fluke stream --device "<DEVICE_ID>" --duration 30
 fluke stream --device "<DEVICE_ID>" --dashboard
+fluke stream --device "<DEVICE_ID>" --speak --speak-interval 15
+fluke stream --device "<DEVICE_ID>" --mqtt-host 192.168.1.10 --mqtt-topic fluke
 ```
 
 Use `--dashboard` if you want the retro terminal dashboard instead of plain line output.
@@ -151,25 +155,73 @@ Use this to stream readings and trigger threshold alerts.
 fluke alert --device "<DEVICE_ID>" --high 120
 ```
 
+Alarm logic is provided by the shared `AlertEvaluator` service, so the CLI and
+desktop app behave identically. Alarms fire on high/low value crossings, on an
+out-of-band duration (debounce), and on reading-status conditions (over-range,
+no-signal). A connection drop is also reported.
+
 Options:
 
 - `--device`
 - `--profile`
 - `--high`
 - `--low`
+- `--debounce` — require the value to stay out of band for N seconds before alerting
+- `--no-status-alerts` — do not alert on over-range / no-signal status
 - `--duration`
 - `--bell`
 - `--no-bell`
+- `--speak` and speech options (see [Spoken readings](#spoken-readings-tts)) — spoken alerts are announced on trigger
 
 Examples:
 
 ```powershell
 fluke alert --device "<DEVICE_ID>" --high 120
 fluke alert --device "<DEVICE_ID>" --low 10 --high 120 --duration 60
+fluke alert --device "<DEVICE_ID>" --high 120 --debounce 2
 fluke alert --device "<DEVICE_ID>" --high 120 --no-bell
+fluke alert --device "<DEVICE_ID>" --high 120 --speak
 ```
 
-If neither threshold is supplied, the command still runs but warns that no alert thresholds are active.
+With no thresholds and status alerts still enabled, the command alerts only on
+meter status conditions. If both thresholds and status alerts are disabled, the
+command warns that no alerts are active.
+
+### Spoken readings (TTS)
+
+`fluke stream` and `fluke alert` accept `--speak` to announce readings aloud
+using a platform-native engine (Windows SAPI, macOS `say`, Linux `espeak`, or
+`pyttsx3`). If no engine is available the flag is a no-op and a warning is
+printed. Readings are pronounced with unit expansion, e.g. `121.3 V` AC becomes
+"one hundred twenty-one point three volts A C".
+
+Options (shared by both commands):
+
+- `--speak` — enable spoken readings
+- `--speak-mode {interval,on_stable,on_change,on_alert}` — when to speak (default `interval`)
+- `--speak-interval N` — seconds between spoken readings in interval mode
+- `--speak-delta N` — minimum change to announce in `on_change` mode
+
+In `fluke alert`, alert transitions are always spoken regardless of mode.
+
+### MQTT publishing
+
+`fluke stream` and `fluke log` can publish each reading to an MQTT broker when
+`--mqtt-host` is provided. See [docs/integrations.md](integrations.md) for the
+full topic layout and Home Assistant setup.
+
+Options (shared by both commands):
+
+- `--mqtt-host` — broker host (enables publishing)
+- `--mqtt-port` — broker port (default 1883)
+- `--mqtt-username` / `--mqtt-password`
+- `--mqtt-tls`
+- `--mqtt-topic` — base topic (default `fluke`)
+- `--mqtt-qos {0,1,2}`
+- `--mqtt-retain`
+- `--mqtt-no-discovery` — disable Home Assistant MQTT discovery
+
+MQTT support requires the optional extra: `pip install -e ".[mqtt]"`.
 
 ### `log`
 
@@ -196,6 +248,7 @@ Options:
 - `--csv-output`
 - `--json-output`
 - `--quiet`
+- `--mqtt-host` and MQTT options (see [MQTT publishing](#mqtt-publishing))
 
 Examples:
 
@@ -203,6 +256,7 @@ Examples:
 fluke log --device "<DEVICE_ID>" --count 100
 fluke log --device "<DEVICE_ID>" --duration 60 --tags "battery,validation"
 fluke log --device "<DEVICE_ID>" --duration 30 --csv-output exports/session.csv --json-output exports/session.json
+fluke log --device "<DEVICE_ID>" --duration 60 --mqtt-host 192.168.1.10
 ```
 
 Behavior:

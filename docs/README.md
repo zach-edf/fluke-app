@@ -13,6 +13,7 @@ If you are new to the repo, start with the guides below instead of reading the c
 - [CLI Guide](cli-guide.md): command reference, examples, and common terminal workflows
 - [Workflows Page Guide](workflows-page.md): detailed explanation of guided workflow execution and workflow creation
 - [Data and Exports Guide](data-and-exports.md): where data is stored, what gets exported, and how export behavior works
+- [Integrations Guide](integrations.md): MQTT publishing and Home Assistant MQTT Discovery setup
 - [SDK Guide](sdk-guide.md): using the Python API directly from code
 
 ### Developers and contributors

@@ -50,6 +50,9 @@ Key methods:
 - `latest_reading()`
 - `on_reading(handler)`
 - `stream_readings()`
+- `attach_publisher(publisher)` — attach an `MqttPublisher` (or any object with
+  `connect`/`publish_reading`/`disconnect`); its lifecycle follows the client's.
+  See the [Integrations Guide](integrations.md) for MQTT and Home Assistant setup.
 
 ## Basic Example
 

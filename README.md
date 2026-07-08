@@ -56,6 +56,9 @@ What exists now:
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow run history can be reviewed and exported as reports from the desktop UI
+- shared alerting (`AlertEvaluator`) with high/low thresholds, out-of-band duration debounce, and reading-status / connection alerts, surfaced in both the CLI and desktop app (banner, beep, OS notification, and session markers)
+- spoken readings (text-to-speech) via a platform-native backend abstraction, with interval / on-stable / on-change / on-alert modes in the CLI and desktop
+- optional MQTT publishing (`.[mqtt]`) of readings plus availability (LWT) and Home Assistant MQTT Discovery, available from the CLI and SDK
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
@@ -132,6 +135,8 @@ Full contributor / desktop dependency set:
 - `requirements-full.txt`: desktop, plotting, dashboard/data extras, plus the base BLE runtime
 - package extras are also available through `pyproject.toml`:
   - `.[desktop]`: desktop UI and charting
+  - `.[mqtt]`: MQTT publishing / Home Assistant discovery (`paho-mqtt`)
+  - `.[speech]`: optional cross-platform TTS backend (`pyttsx3`); native engines need no extra
   - `.[full]`: desktop plus the current optional extras used in the repo
   - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
@@ -649,6 +654,7 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
 - [docs/data-and-exports.md](docs/data-and-exports.md)
+- [docs/integrations.md](docs/integrations.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)
 - [docs/workflows-page.md](docs/workflows-page.md)
 - [docs/developer/README.md](docs/developer/README.md)
