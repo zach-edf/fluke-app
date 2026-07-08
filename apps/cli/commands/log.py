@@ -5,8 +5,14 @@ import asyncio
 import sys
 
 from apps.cli.formatters import format_reading, nonneg_float, nonneg_int, parse_tags
-from apps.cli.runtime import attach_connection_diagnostics, build_device_manager, default_database_path, open_store
-from fluke_app import ExportService, SessionRecorder, new_session
+from apps.cli.runtime import (
+    add_reconnect_flag,
+    attach_connection_diagnostics,
+    build_device_manager,
+    default_database_path,
+    open_store,
+)
+from fluke_app import ExportService, SessionConnectionMarkers, SessionRecorder, new_session
 from fluke_app.export_service import SessionCsvExporter, SessionJsonExporter
 from fluke_core.models.reading import Reading
 
@@ -24,15 +30,20 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--csv-output", default=None, help="Optional export path for session CSV")
     parser.add_argument("--json-output", default=None, help="Optional export path for session JSON")
     parser.add_argument("--quiet", action="store_true", help="Do not print each reading while logging")
+    add_reconnect_flag(parser)
     parser.set_defaults(func=handle)
 
 
 async def handle(args: argparse.Namespace) -> int:
     db_path = args.database or default_database_path()
-    manager = build_device_manager()
+    manager = build_device_manager(auto_reconnect=not getattr(args, "no_reconnect", False))
     attach_connection_diagnostics(manager)
     store = open_store(db_path)
     recorder = SessionRecorder(store.sessions, store.readings, store.markers)
+    # Insert connection_lost / connection_restored markers so drop gaps stay
+    # visible in the recorded session even if reconnect succeeds mid-run.
+    connection_markers = SessionConnectionMarkers(recorder)
+    manager.subscribe_connection_diagnostics(connection_markers.handle_status)
 
     recorded = 0
     finished = asyncio.Event()

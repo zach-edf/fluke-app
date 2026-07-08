@@ -10,6 +10,7 @@ from fluke_sdk.bootstrap import ensure_repo_paths
 ensure_repo_paths()
 
 from fluke_app.device_manager import ConnectionRetryPolicy, DeviceManager
+from fluke_app.reconnect_policy import ReconnectPolicy
 from fluke_ble.adapter import BleAdapter
 from fluke_core import ConnectionState, DeviceInfo, Reading
 from fluke_plugins import build_profile_registry
@@ -30,6 +31,7 @@ class FlukeClient:
         *,
         auto_reconnect: bool = True,
         retry_policy: ConnectionRetryPolicy | None = None,
+        reconnect_policy: ReconnectPolicy | None = None,
     ) -> None:
         self._ble_adapter = ble_adapter or _build_ble_adapter()
         self._profiles = profile_registry or build_profile_registry()
@@ -37,6 +39,7 @@ class FlukeClient:
             self._ble_adapter,
             self._profiles,
             retry_policy=retry_policy,
+            reconnect_policy=reconnect_policy,
             auto_reconnect=auto_reconnect,
         )
         self._queue: asyncio.Queue[object] = asyncio.Queue()

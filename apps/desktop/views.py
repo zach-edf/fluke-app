@@ -1521,8 +1521,19 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
 
     theme_combo.currentIndexChanged.connect(_on_theme_changed)
 
+    auto_reconnect_checkbox = QCheckBox("Automatically reconnect if the meter drops")
+    auto_reconnect_checkbox.setToolTip(
+        "When on, the app retries a dropped BLE connection with backoff and keeps the "
+        "active logging session going. Turn off to end sessions on the first drop."
+    )
+    auto_reconnect_checkbox.setChecked(True)
+    auto_reconnect_checkbox.toggled.connect(
+        lambda checked: _safe_call(runtime, lambda: runtime.presenter.set_auto_reconnect(checked))
+    )
+
     theme_form = QFormLayout()
     theme_form.addRow("Theme", theme_combo)
+    theme_form.addRow("Auto-reconnect", auto_reconnect_checkbox)
     fixture_form = QFormLayout()
     fixture_form.addRow("Fixture Frames", fixture_frame_count)
 
@@ -1556,6 +1567,7 @@ def _settings_panel(window: QWidget, runtime) -> _PanelRefs:
             "capabilities_info": capabilities_info, "services_info": services_info,
             "live_buffer": live_buffer, "fixture_status": fixture_status,
             "export_dir_input": export_dir_input, "theme_combo": theme_combo,
+            "auto_reconnect_checkbox": auto_reconnect_checkbox,
             "fixture_frame_count": fixture_frame_count, "export_fixture_button": export_fixture_button,
         },
     )
@@ -2046,6 +2058,11 @@ def _refresh_settings(runtime, panel: _PanelRefs) -> None:
     export_dir_input = panel.refs["export_dir_input"]
     if export_dir_input.text() != settings.export_directory_text:
         export_dir_input.setText(settings.export_directory_text)
+    auto_reconnect_checkbox = panel.refs.get("auto_reconnect_checkbox")
+    if auto_reconnect_checkbox is not None and auto_reconnect_checkbox.isChecked() != settings.auto_reconnect_enabled:
+        auto_reconnect_checkbox.blockSignals(True)
+        auto_reconnect_checkbox.setChecked(settings.auto_reconnect_enabled)
+        auto_reconnect_checkbox.blockSignals(False)
     panel.refs["export_fixture_button"].setEnabled(bool(settings.active_device_text and settings.active_device_text != "No device connected"))
 
 

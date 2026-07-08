@@ -47,13 +47,24 @@ def require_bleak_adapter() -> type[object]:
     return BleakAdapter
 
 
-def build_device_manager() -> DeviceManager:
+def build_device_manager(*, auto_reconnect: bool = True) -> DeviceManager:
     bleak_adapter_cls = require_bleak_adapter()
     return DeviceManager(
         ble_adapter=bleak_adapter_cls(),
         profile_registry=build_profile_registry(),
         event_bus=EventBus(),
         reading_stream=ReadingStreamService(),
+        auto_reconnect=auto_reconnect,
+    )
+
+
+def add_reconnect_flag(parser) -> None:
+    """Add the shared ``--no-reconnect`` flag to a CLI subcommand parser."""
+    parser.add_argument(
+        "--no-reconnect",
+        dest="no_reconnect",
+        action="store_true",
+        help="Disable automatic reconnect; a dropped connection ends the command.",
     )
 
 

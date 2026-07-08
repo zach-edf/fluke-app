@@ -10,7 +10,7 @@ import argparse
 import asyncio
 import sys
 
-from apps.cli.runtime import attach_connection_diagnostics, build_device_manager
+from apps.cli.runtime import add_reconnect_flag, attach_connection_diagnostics, build_device_manager
 from fluke_core.models.reading import Reading
 
 
@@ -39,11 +39,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--device", required=True, help="BLE device identifier from scan output")
     parser.add_argument("--profile", default="fluke_376fc", help="Device profile id to use")
     parser.add_argument("--duration", type=float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
+    add_reconnect_flag(parser)
     parser.set_defaults(func=handle)
 
 
 async def handle(args: argparse.Namespace) -> int:
-    manager = build_device_manager()
+    manager = build_device_manager(auto_reconnect=not getattr(args, "no_reconnect", False))
     attach_connection_diagnostics(manager)
     samples = 0
     finished = asyncio.Event()

@@ -161,6 +161,7 @@ class AppPresenter:
             database_path_text=str(store.path),
             export_directory_text=str(self._export_directory),
             diagnostics_text="PySide6 and BLE runtime configured.",
+            auto_reconnect_enabled=bool(getattr(device_manager, "auto_reconnect_enabled", lambda: True)()),
         )
         self._workflow_directory = default_workflow_directory()
         self._workflow_extra_paths = tuple(Path(path) for path in workflow_extra_paths)
@@ -341,7 +342,7 @@ class AppPresenter:
         device = self._current_device
         if status.is_recovery and status.phase in {"recovery_waiting", "direct_connect", "stream_start", "rescan"} and device is not None:
             if status.phase == "recovery_waiting":
-                self._record_system_marker("Connection lost. Automatic reconnect started.", label="system")
+                self._record_system_marker("Connection lost. Automatic reconnect started.", label="connection_lost")
             if status.phase == "rescan":
                 self._set_reconnecting_state(device, status.attempt, max(1, status.total_attempts))
                 with self._lock:
@@ -359,7 +360,7 @@ class AppPresenter:
                     self._current_device = active
             if self._current_device is not None:
                 self._set_reconnected_state(self._current_device)
-                self._record_system_marker("Connection restored after automatic reconnect.", label="system")
+                self._record_system_marker("Connection restored after automatic reconnect.", label="connection_restored")
                 self._store.upsert_device(self._current_device)
                 self.refresh_recent_devices()
                 self.refresh_recent_sessions()
@@ -893,6 +894,21 @@ class AppPresenter:
     def set_export_status(self, message: str) -> None:
         with self._lock:
             self._session = replace(self._session, export_status_text=message)
+
+    def set_auto_reconnect(self, enabled: bool) -> None:
+        """Enable/disable automatic reconnect from the Settings tab (default on)."""
+        enabled = bool(enabled)
+        setter = getattr(self._device_manager, "set_auto_reconnect", None)
+        if callable(setter):
+            setter(enabled)
+        with self._lock:
+            self._settings = replace(self._settings, auto_reconnect_enabled=enabled)
+            state = "enabled" if enabled else "disabled"
+            self._settings = replace(self._settings, diagnostics_text=f"Automatic reconnect {state}.")
+
+    def auto_reconnect_enabled(self) -> bool:
+        with self._lock:
+            return self._settings.auto_reconnect_enabled
 
     async def shutdown(self) -> None:
         self._remember_running_loop()

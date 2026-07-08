@@ -211,6 +211,7 @@ class SettingsViewModel:
     live_buffer_text: str = ""
     fixture_status_text: str = ""
     theme: str = "light"
+    auto_reconnect_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)

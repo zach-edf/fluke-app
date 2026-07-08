@@ -5,7 +5,7 @@ import asyncio
 import sys
 
 from apps.cli.formatters import format_reading, nonneg_float, nonneg_int
-from apps.cli.runtime import attach_connection_diagnostics, build_device_manager
+from apps.cli.runtime import add_reconnect_flag, attach_connection_diagnostics, build_device_manager
 from fluke_core.models.reading import Reading
 
 
@@ -16,11 +16,12 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--duration", type=nonneg_float, default=0.0, help="Stop after N seconds; 0 runs until interrupted")
     parser.add_argument("--count", type=nonneg_int, default=0, help="Stop after N readings")
     parser.add_argument("--dashboard", action="store_true", help="Show retro sci-fi live dashboard instead of plain output")
+    add_reconnect_flag(parser)
     parser.set_defaults(func=handle)
 
 
 async def handle(args: argparse.Namespace) -> int:
-    manager = build_device_manager()
+    manager = build_device_manager(auto_reconnect=not getattr(args, "no_reconnect", False))
     attach_connection_diagnostics(manager)
 
     if getattr(args, "dashboard", False):
