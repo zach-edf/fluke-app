@@ -56,7 +56,8 @@ What exists now:
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow run history can be reviewed and exported as reports from the desktop UI
-- CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
+- CLI for scan, stream, watch, alert, serve, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
+- LAN-only live web view (`fluke serve`) so a helper can watch the live reading on their phone browser, no cloud or accounts
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
 - hardware-free test coverage using fake BLE adapters and replay frames
@@ -132,6 +133,7 @@ Full contributor / desktop dependency set:
 - `requirements-full.txt`: desktop, plotting, dashboard/data extras, plus the base BLE runtime
 - package extras are also available through `pyproject.toml`:
   - `.[desktop]`: desktop UI and charting
+  - `.[web]`: LAN live web view (`fluke serve`): `aiohttp` + optional `qrcode`
   - `.[full]`: desktop plus the current optional extras used in the repo
   - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
@@ -281,6 +283,15 @@ Additional live terminal views:
 fluke watch --device "<DEVICE_ID>" --profile fluke_376fc
 fluke alert --device "<DEVICE_ID>" --profile fluke_376fc --high 120
 ```
+
+LAN live web view for a second person on a phone (trusted LAN only, read-only):
+
+```bash
+fluke serve --device "<DEVICE_ID>" --profile fluke_376fc
+```
+
+This prints the LAN URLs plus a scannable QR code and serves a mobile-first live
+page over WebSocket. See [docs/web-live-view.md](docs/web-live-view.md).
 
 ### 3. Log to SQLite and optionally export
 
@@ -648,6 +659,7 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/getting-started.md](docs/getting-started.md)
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
+- [docs/web-live-view.md](docs/web-live-view.md)
 - [docs/data-and-exports.md](docs/data-and-exports.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)
 - [docs/workflows-page.md](docs/workflows-page.md)
