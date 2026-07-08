@@ -33,12 +33,18 @@ data = [
   "pandas>=2.2",
   "pyarrow>=16",
 ]
+web = [
+  "aiohttp>=3.9",
+  "qrcode>=7.4",
+]
 full = [
   "PySide6>=6.7",
   "matplotlib>=3.9",
   "rich>=13.7",
   "pandas>=2.2",
   "pyarrow>=16",
+  "aiohttp>=3.9",
+  "qrcode>=7.4",
 ]
 dev = [
   "PySide6>=6.7",
@@ -46,6 +52,8 @@ dev = [
   "rich>=13.7",
   "pandas>=2.2",
   "pyarrow>=16",
+  "aiohttp>=3.9",
+  "qrcode>=7.4",
 ]
 
 [project.scripts]
