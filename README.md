@@ -137,6 +137,26 @@ Full contributor / desktop dependency set:
 
 ## Installation
 
+### Packaged installer (recommended for end users)
+
+If you just want to run the desktop app and do not work in Python, use a
+prebuilt installer. No Python install is required.
+
+1. Open the project's [GitHub Releases](../../releases) page.
+2. Download the asset for your platform:
+   - Windows: `FlukeCommunity-<version>-Setup.exe`
+   - macOS: `FlukeCommunity-<version>.dmg`
+3. Install:
+   - Windows: run the `Setup.exe` (a per-user install, no admin rights needed)
+     and launch `Fluke Community` from the Start menu.
+   - macOS: open the `.dmg` and drag `Fluke Community` to `Applications`. The
+     build is currently unsigned, so on first launch right-click the app and
+     choose **Open** to get past Gatekeeper.
+
+The rest of this section describes the source install for developers and
+contributors. To build the installers yourself, see
+[packaging/README.md](packaging/README.md).
+
 ### Full install (desktop + CLI + SDK)
 
 macOS / Linux:
