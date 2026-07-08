@@ -48,8 +48,15 @@ Key methods:
 - `close()`
 - `state()`
 - `latest_reading()`
+- `last_connection_error()`
 - `on_reading(handler)`
 - `stream_readings()`
+
+Constructor keyword arguments of note:
+
+- `auto_reconnect` (default `True`)
+- `reconnect_policy` (a `ReconnectPolicy`; exponential backoff + jitter)
+- `retry_policy` (a `ConnectionRetryPolicy` for initial connect/scan structure)
 
 ## Basic Example
 
@@ -106,7 +113,36 @@ Behavior:
 
 - the first call starts streaming if it has not already started
 - readings are yielded as normalized `Reading` domain objects
-- the iterator stops when the internal stream is closed
+- the iterator transparently continues across an automatic reconnect: an
+  unexpected BLE drop pauses the stream, and once the client reconnects, readings
+  resume on the same iterator
+- the iterator stops when the internal stream is closed (explicit `disconnect()`
+  / `close()`, or when automatic reconnect ultimately gives up)
+
+### Configuring reconnect
+
+Automatic reconnect is on by default. The policy is configurable at construction
+time:
+
+```python
+from fluke_sdk import FlukeClient
+from fluke_app import ReconnectPolicy
+
+client = FlukeClient(
+    auto_reconnect=True,
+    reconnect_policy=ReconnectPolicy(
+        initial_delay_s=0.5,   # first backoff
+        max_delay_s=30.0,      # cap
+        multiplier=2.0,        # exponential growth
+        jitter=0.25,           # +/-25% randomization
+        max_attempts=0,        # 0 = unlimited (bounded by give_up_after_s)
+        give_up_after_s=0.0,   # 0 = no overall timeout
+    ),
+)
+```
+
+Pass `auto_reconnect=False` to make the first unexpected drop terminate the
+stream. Call `last_connection_error()` after the iterator ends to see why.
 
 ## Callback Style
 

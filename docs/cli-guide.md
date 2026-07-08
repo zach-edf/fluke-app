@@ -111,6 +111,7 @@ Options:
 - `--duration`
 - `--count`
 - `--dashboard`
+- `--no-reconnect`
 
 Examples:
 
@@ -118,6 +119,7 @@ Examples:
 fluke stream --device "<DEVICE_ID>" --count 25
 fluke stream --device "<DEVICE_ID>" --duration 30
 fluke stream --device "<DEVICE_ID>" --dashboard
+fluke stream --device "<DEVICE_ID>" --no-reconnect
 ```
 
 Use `--dashboard` if you want the retro terminal dashboard instead of plain line output.
@@ -135,6 +137,7 @@ Options:
 - `--device`
 - `--profile`
 - `--duration`
+- `--no-reconnect`
 
 This mode updates a single terminal line with:
 
@@ -196,6 +199,7 @@ Options:
 - `--csv-output`
 - `--json-output`
 - `--quiet`
+- `--no-reconnect`
 
 Examples:
 
@@ -210,6 +214,18 @@ Behavior:
 - readings are recorded into SQLite as they arrive
 - the command stops on `Ctrl+C`, duration, or count limit
 - if export paths are provided, exports happen after the session is completed
+
+Automatic reconnect (all of `stream`, `watch`, and `log`):
+
+- an unexpected BLE drop triggers automatic reconnect with exponential backoff
+  and jitter; status lines are printed to stderr (for example
+  `[recovery:direct connect (1/2)] ...`)
+- for `log`, the recording session is kept open across the drop; readings keep
+  appending to the same session id and `connection_lost` / `connection_restored`
+  markers bracket the gap in the stored session
+- pass `--no-reconnect` to disable this; the first unexpected drop then ends the
+  command (and, for `log`, finalizes the session)
+- a `Ctrl+C` / user-initiated stop is never treated as an unexpected drop
 
 ### `sessions list`
 

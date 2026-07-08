@@ -223,10 +223,19 @@ The primary channel remains the default charted value in the current desktop UI.
 
 If the device disconnects unexpectedly:
 
-- the app attempts automatic reconnect
-- the UI updates to show reconnect progress
-- if reconnect succeeds, streaming resumes
-- if reconnect fails, logging stops and active workflows are canceled
+- the app attempts automatic reconnect with exponential backoff and jitter
+- the Live Reading tab shows a reconnecting banner with the current attempt count
+- an active logging session is **not** ended; on reconnect, readings keep
+  appending to the same session
+- automatic `connection_lost` and `connection_restored` markers bracket the gap,
+  so the outage is visible in replay and exports
+- if reconnect succeeds, streaming resumes on the same session
+- if reconnect ultimately fails, logging stops and active workflows are canceled
+
+Automatic reconnect can be turned off in `Settings` under **Auto-reconnect**
+(it is on by default). With it off, the first unexpected drop ends the session.
+
+A user-initiated disconnect never triggers automatic reconnect.
 
 The `Reconnect Last Device` action on the `Home` tab is a separate manual reconnect feature for the most recently used device.
 
@@ -381,6 +390,7 @@ The `Settings` tab exposes app-level desktop settings and diagnostics.
 - runtime diagnostics text
 - export directory input
 - theme selector
+- auto-reconnect toggle (on by default)
 - active device/family/profile summary when connected
 - active capability summary when connected
 - runtime services summary when connected

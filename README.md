@@ -47,6 +47,12 @@ For a structured documentation set instead of this high-level overview, start wi
 What exists now:
 
 - BLE scan, connect, and stream path through shared services
+- automatic reconnection with session continuation: an unexpected drop retries
+  with exponential backoff + jitter (configurable), keeps the active recording
+  session open, and inserts `connection_lost` / `connection_restored` gap markers
+  so outages are visible in replay and exports; surfaced through the shared event
+  bus to desktop (Live Reading banner + Settings toggle), CLI (`--no-reconnect`),
+  and the SDK (`ReconnectPolicy`)
 - normalized `Reading` model and 376 FC profile decoder
 - SQLite session, marker, workflow-run, and export support
 - desktop app with discovery, live view, charting, replay, markers, session export, and workflow runner
@@ -64,7 +70,10 @@ What exists now:
 What still needs repeated real-hardware validation:
 
 - longer-duration BLE sessions on the rebuilt stack
-- reconnect stability over longer sessions
+- automatic reconnection is currently validated only against the fake BLE adapter
+  (scripted drops and reconnect outcomes); backoff timing, reconnect success rate,
+  and session-continuation behavior against real meters and real BLE stacks still
+  need repeated on-hardware validation before the support matrix is relaxed
 - packaged installer behavior
 - additional model support beyond the 376 FC
 
