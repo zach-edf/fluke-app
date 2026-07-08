@@ -11,7 +11,7 @@ from apps.cli._bootstrap import ensure_repo_paths
 ensure_repo_paths()
 
 from apps.cli import __version__
-from apps.cli.commands import alert, debug, devices, fixtures, log, plugins, scan, sessions, stream, watch, workflow
+from apps.cli.commands import alert, assets, debug, devices, fixtures, log, plugins, scan, sessions, stream, watch, workflow
 from apps.cli.runtime import configure_logging
 
 
@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     alert.register(subparsers)
+    assets.register(subparsers)
     debug.register(subparsers)
     devices.register(subparsers)
     fixtures.register(subparsers)
