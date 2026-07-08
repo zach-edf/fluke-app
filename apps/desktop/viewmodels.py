@@ -165,6 +165,7 @@ class DiscoveryViewModel:
 class SessionViewModel:
     active_session_id: str | None = None
     selected_session_id: str | None = None
+    selected_session_asset_id: str | None = None
     selected_context_id: str | None = None
     selected_context_label: str = ""
     selected_replay_channel: str = "primary"
@@ -196,6 +197,43 @@ class SessionViewModel:
     chart_points: tuple[tuple[float, float], ...] = ()
     compare_chart_points: tuple[tuple[float, float], ...] = ()
     marker_points: tuple[tuple[float, float], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AssetSummaryViewModel:
+    asset_id: str
+    name: str
+    asset_type: str
+    location: str
+    session_count_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class AssetTrendMeasurementViewModel:
+    context_id: str
+    label: str
+    unit: str
+
+
+@dataclass(frozen=True, slots=True)
+class AssetsViewModel:
+    assets: tuple[AssetSummaryViewModel, ...] = ()
+    asset_options: tuple[tuple[str, str], ...] = ()
+    selected_asset_id: str | None = None
+    selected_asset_name: str = ""
+    selected_asset_type: str = ""
+    selected_asset_location: str = ""
+    selected_asset_notes: str = ""
+    status_text: str = "Create an asset to start trending its measurements over time."
+    detail_text: str = "Select an asset to view its linked sessions and trend."
+    linked_sessions: tuple[SessionSummaryViewModel, ...] = ()
+    available_measurements: tuple[AssetTrendMeasurementViewModel, ...] = ()
+    selected_measurement_id: str | None = None
+    selected_stat: str = "avg"
+    trend_unit_text: str = ""
+    trend_label_text: str = ""
+    trend_points: tuple[tuple[float, float], ...] = ()
+    export_status_text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
