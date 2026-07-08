@@ -5,7 +5,18 @@ from pathlib import Path
 from importlib import resources
 
 from fluke_core.enums import MeasurementType, WorkflowInteractionMode
-from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefinition, WorkflowStep
+from fluke_core.models.workflow import (
+    AcceptanceCriteria,
+    RELATIVE_MODES,
+    WORKFLOW_SCHEMA_VERSION,
+    WorkflowCaptureSettings,
+    WorkflowDefinition,
+    WorkflowStep,
+)
+
+
+class WorkflowValidationError(ValueError):
+    """Raised when a workflow definition fails schema validation."""
 
 
 class WorkflowCatalog:
@@ -71,7 +82,9 @@ def _load_definition(path: Path) -> WorkflowDefinition:
 def _load_definition_from_text(text: str) -> WorkflowDefinition:
     payload = json.loads(text)
     steps = tuple(_step_from_payload(step) for step in payload.get("steps", []))
-    return WorkflowDefinition(
+    raw_version = payload.get("schema_version")
+    schema_version = 1 if raw_version in {None, ""} else int(raw_version)
+    definition = WorkflowDefinition(
         workflow_id=payload["workflow_id"],
         title=payload["title"],
         description=payload.get("description", ""),
@@ -79,7 +92,88 @@ def _load_definition_from_text(text: str) -> WorkflowDefinition:
         estimated_duration_min=payload.get("estimated_duration_min"),
         tags=tuple(payload.get("tags", ())),
         steps=steps,
+        schema_version=schema_version,
     )
+    validate_definition(definition)
+    return definition
+
+
+def validate_definition(definition: WorkflowDefinition) -> None:
+    """Validate a workflow definition, raising WorkflowValidationError on problems."""
+
+    if not definition.workflow_id:
+        raise WorkflowValidationError("Workflow is missing a workflow_id.")
+    if not definition.title:
+        raise WorkflowValidationError(f"Workflow {definition.workflow_id!r} is missing a title.")
+    if definition.schema_version > WORKFLOW_SCHEMA_VERSION:
+        raise WorkflowValidationError(
+            f"Workflow {definition.workflow_id!r} declares schema_version "
+            f"{definition.schema_version}, newer than supported {WORKFLOW_SCHEMA_VERSION}."
+        )
+    seen_ids: set[str] = set()
+    capture_ids: set[str] = set()
+    for step in definition.steps:
+        if not step.step_id:
+            raise WorkflowValidationError(f"Workflow {definition.workflow_id!r} has a step without an id.")
+        if step.step_id in seen_ids:
+            raise WorkflowValidationError(
+                f"Workflow {definition.workflow_id!r} has a duplicate step id {step.step_id!r}."
+            )
+        if not step.instruction:
+            raise WorkflowValidationError(
+                f"Step {step.step_id!r} in {definition.workflow_id!r} is missing an instruction."
+            )
+        _validate_acceptance(definition, step, seen_ids, capture_ids)
+        seen_ids.add(step.step_id)
+        if step.is_capture_step:
+            capture_ids.add(step.step_id)
+
+
+def _validate_acceptance(
+    definition: WorkflowDefinition,
+    step: WorkflowStep,
+    prior_ids: set[str],
+    prior_capture_ids: set[str],
+) -> None:
+    criteria = step.acceptance
+    if criteria is None or criteria.is_empty:
+        return
+    if not step.is_capture_step:
+        raise WorkflowValidationError(
+            f"Step {step.step_id!r} in {definition.workflow_id!r} declares acceptance "
+            "criteria but is not a capture step."
+        )
+    if criteria.min_value is not None and criteria.max_value is not None:
+        if criteria.min_value > criteria.max_value:
+            raise WorkflowValidationError(
+                f"Step {step.step_id!r} in {definition.workflow_id!r} has min > max."
+            )
+    if not criteria.has_relative:
+        return
+    if criteria.relative_mode not in RELATIVE_MODES:
+        raise WorkflowValidationError(
+            f"Step {step.step_id!r} in {definition.workflow_id!r} uses unsupported "
+            f"relative_mode {criteria.relative_mode!r}."
+        )
+    if criteria.percent is None:
+        raise WorkflowValidationError(
+            f"Step {step.step_id!r} in {definition.workflow_id!r} relative criterion "
+            "is missing a percent value."
+        )
+    referenced = list(criteria.reference_step_ids)
+    if criteria.reference_step_id:
+        referenced.append(criteria.reference_step_id)
+    if not referenced:
+        raise WorkflowValidationError(
+            f"Step {step.step_id!r} in {definition.workflow_id!r} relative criterion "
+            "references no prior step."
+        )
+    for ref_id in referenced:
+        if ref_id not in prior_capture_ids:
+            raise WorkflowValidationError(
+                f"Step {step.step_id!r} in {definition.workflow_id!r} references prior "
+                f"capture step {ref_id!r} that does not exist earlier in the workflow."
+            )
 
 
 def _step_from_payload(payload: dict[str, object]) -> WorkflowStep:
@@ -94,6 +188,7 @@ def _step_from_payload(payload: dict[str, object]) -> WorkflowStep:
         WorkflowInteractionMode.STABLE_CAPTURE,
         WorkflowInteractionMode.COUNTDOWN_CAPTURE,
     }
+    acceptance = _acceptance_from_payload(payload.get("acceptance"))
     return WorkflowStep(
         step_id=str(payload["id"]),
         title=str(payload.get("title") or payload["id"]),
@@ -105,8 +200,34 @@ def _step_from_payload(payload: dict[str, object]) -> WorkflowStep:
         expected_measurement_type=measurement,
         expected_unit=None if payload.get("expected_unit") in {None, ""} else str(payload["expected_unit"]),
         note_prompt=None if payload.get("note_prompt") in {None, ""} else str(payload["note_prompt"]),
+        acceptance=acceptance,
         metadata=metadata,
     )
+
+
+def _acceptance_from_payload(raw: object) -> AcceptanceCriteria | None:
+    if not isinstance(raw, dict) or not raw:
+        return None
+
+    def _num(key: str) -> float | None:
+        value = raw.get(key)
+        return None if value in {None, ""} else float(value)
+
+    reference_ids_raw = raw.get("reference_step_ids") or ()
+    reference_ids = tuple(str(item) for item in reference_ids_raw if str(item))
+    relative_mode_raw = raw.get("relative_mode")
+    relative_mode = None if relative_mode_raw in {None, ""} else str(relative_mode_raw)
+    criteria = AcceptanceCriteria(
+        min_value=_num("min") if "min" in raw else _num("min_value"),
+        max_value=_num("max") if "max" in raw else _num("max_value"),
+        reference_step_id=None if raw.get("reference_step_id") in {None, ""} else str(raw["reference_step_id"]),
+        reference_step_ids=reference_ids,
+        relative_mode=relative_mode,
+        percent=_num("percent"),
+        unit=None if raw.get("unit") in {None, ""} else str(raw["unit"]),
+        description=None if raw.get("description") in {None, ""} else str(raw["description"]),
+    )
+    return None if criteria.is_empty else criteria
 
 
 def _interaction_mode_from_payload(payload: dict[str, object]) -> WorkflowInteractionMode:

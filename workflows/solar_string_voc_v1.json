@@ -1,0 +1,63 @@
+{
+  "workflow_id": "solar_string_voc_v1",
+  "title": "Solar String Open-Circuit Voltage Check",
+  "description": "Measure open-circuit DC voltage (Voc) on parallel PV strings and confirm the strings match within tolerance.",
+  "category": "Solar",
+  "schema_version": 2,
+  "estimated_duration_min": 7,
+  "tags": [
+    "solar",
+    "pv",
+    "voltage-dc",
+    "voc"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: PV strings produce hazardous DC voltage in daylight and cannot be switched off. Confirm the meter and leads are DC-rated for the string voltage (up to 1000 V). Never open a connector under load - only measure Voc at an open (disconnected) string. Watch polarity.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record module model, count per string, and expected Voc."
+    },
+    {
+      "id": "measure_string_a_voc",
+      "title": "Measure String A Voc",
+      "instruction": "With String A open-circuited, set the meter to DC voltage and measure across the string leads. Capture the open-circuit voltage.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 10,
+        "max": 1000,
+        "unit": "V",
+        "description": "Sanity band up to the 1000 V system limit; refine to expected string Voc."
+      },
+      "note_prompt": "Record String A Voc."
+    },
+    {
+      "id": "measure_string_b_voc",
+      "title": "Measure String B Voc",
+      "instruction": "Measure the open-circuit voltage of a matching parallel String B under the same irradiance. Capture the reading. Matching strings should agree within about 5%; a larger gap suggests a bad module, connector, or bypass diode.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_dc",
+      "expected_unit": "V",
+      "acceptance": {
+        "reference_step_id": "measure_string_a_voc",
+        "relative_mode": "percent_within",
+        "percent": 5,
+        "unit": "V",
+        "description": "String B Voc must be within 5% of String A under the same conditions."
+      },
+      "note_prompt": "Note any string that is low."
+    },
+    {
+      "id": "record_result",
+      "title": "Record Result",
+      "instruction": "Document the comparison. Investigate mismatched strings before commissioning or reconnecting to the inverter.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize findings."
+    }
+  ]
+}

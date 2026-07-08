@@ -1,0 +1,78 @@
+{
+  "workflow_id": "receptacle_branch_survey_v1",
+  "title": "Receptacle Branch Circuit Survey",
+  "description": "Survey a 120 V receptacle: hot-neutral, hot-ground, and neutral-ground voltages to confirm correct wiring and low neutral-ground offset.",
+  "category": "Electrical",
+  "schema_version": 2,
+  "estimated_duration_min": 6,
+  "tags": [
+    "receptacle",
+    "branch-circuit",
+    "voltage",
+    "wiring"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: Use a CAT III/IV rated meter and inspect leads. Insert probes fully and keep fingers behind the barriers. Do not bridge slots with bare fingers. This survey is for standard 120 V NEMA 5-15/5-20 receptacles.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record the circuit/receptacle location."
+    },
+    {
+      "id": "measure_hot_neutral",
+      "title": "Measure Hot-Neutral",
+      "instruction": "Set the meter to AC voltage. Measure between the hot (short slot) and neutral (long slot). Capture the reading; it should be near 120 V.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 108,
+        "max": 132,
+        "unit": "V",
+        "description": "120 V nominal +/-10%."
+      },
+      "note_prompt": "Record hot-neutral voltage."
+    },
+    {
+      "id": "measure_hot_ground",
+      "title": "Measure Hot-Ground",
+      "instruction": "Measure between the hot (short slot) and ground (round pin). Capture the reading; it should closely match the hot-neutral value on a correctly wired receptacle.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "reference_step_id": "measure_hot_neutral",
+        "relative_mode": "percent_within",
+        "percent": 3,
+        "unit": "V",
+        "description": "Hot-ground should be within 3% of hot-neutral; a large gap suggests an open or high-resistance ground."
+      },
+      "note_prompt": "Record hot-ground voltage."
+    },
+    {
+      "id": "measure_neutral_ground",
+      "title": "Measure Neutral-Ground",
+      "instruction": "Measure between neutral (long slot) and ground (round pin). Capture the reading; on a healthy circuit this offset is small (typically under ~2 V under load).",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "max": 3.0,
+        "unit": "V",
+        "description": "Neutral-ground offset should stay low; high values indicate an overloaded neutral or bootleg/open ground."
+      },
+      "note_prompt": "Record neutral-ground voltage."
+    },
+    {
+      "id": "record_result",
+      "title": "Record Result",
+      "instruction": "Document the survey. Abnormal readings can indicate reversed polarity, open ground, open neutral, or a bootleg ground.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize wiring condition and any defects found."
+    }
+  ]
+}

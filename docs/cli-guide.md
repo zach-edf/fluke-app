@@ -337,6 +337,43 @@ Behavior:
 - for capture steps, uses the latest live reading when you confirm capture
 - `Enter` completes or captures the step
 - `s` skips the step
+- for capture steps with acceptance criteria, prints a `PASS` / `FAIL` verdict
+  with the limit that failed, and prints an overall run verdict at the end
+
+### `workflow history`
+
+Use this to review recent workflow runs and their verdicts.
+
+```powershell
+fluke workflow history
+fluke workflow history --run "<RUN_ID>"
+fluke --json workflow history
+```
+
+Options:
+
+- `--limit` (number of recent runs; default 10)
+- `--run` (show per-step status, readings, and PASS/FAIL detail for one run)
+- `--database`
+
+### `workflow report`
+
+Use this to render a completed workflow run into a professional PDF job report.
+
+```powershell
+fluke workflow report --run "<RUN_ID>" --output report.pdf --customer "Jane Doe" --job "JOB-42" --technician "Zach V"
+```
+
+Options:
+
+- `--run` (required) and `--output` (required)
+- `--business-name`, `--logo`
+- `--customer`, `--site`, `--job`, `--technician`, `--report-notes`
+- `--database`
+
+The customer/site/job/technician/business metadata is persisted with the run so
+later reports reuse it. PDF rendering requires the `reportlab` package (install
+the `.[reports]` or `.[full]` extra).
 
 For deeper workflow semantics and the desktop workflow page, see [Workflows Page Guide](workflows-page.md).
 

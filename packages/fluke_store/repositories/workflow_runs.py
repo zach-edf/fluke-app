@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import json
 import sqlite3
 from datetime import datetime
 
-from fluke_core.enums import WorkflowRunResult
+from fluke_core.enums import WorkflowRunResult, WorkflowVerdict
 from fluke_core.models.workflow import WorkflowRun
 
 
@@ -18,15 +19,18 @@ class WorkflowRunRepository:
             self._con.execute(
                 """
                 INSERT INTO workflow_runs (
-                    run_id, workflow_id, session_id, started_at, ended_at, result, workflow_title
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    run_id, workflow_id, session_id, started_at, ended_at, result,
+                    workflow_title, verdict, report_meta_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     workflow_id=excluded.workflow_id,
                     session_id=excluded.session_id,
                     started_at=excluded.started_at,
                     ended_at=excluded.ended_at,
                     result=excluded.result,
-                    workflow_title=excluded.workflow_title
+                    workflow_title=excluded.workflow_title,
+                    verdict=excluded.verdict,
+                    report_meta_json=excluded.report_meta_json
                 """,
                 (
                     run.run_id,
@@ -36,6 +40,8 @@ class WorkflowRunRepository:
                     run.ended_at.isoformat() if run.ended_at else None,
                     run.result.value,
                     run.workflow_title,
+                    run.verdict.value,
+                    json.dumps(run.report_meta or {}, sort_keys=True),
                 ),
             )
             self._con.commit()
@@ -77,6 +83,15 @@ class WorkflowRunRepository:
 
 
 def _run_from_row(row: sqlite3.Row) -> WorkflowRun:
+    keys = row.keys()
+    verdict_raw = row["verdict"] if "verdict" in keys else None
+    report_meta_raw = row["report_meta_json"] if "report_meta_json" in keys else None
+    report_meta = {}
+    if report_meta_raw:
+        try:
+            report_meta = {str(k): str(v) for k, v in dict(json.loads(report_meta_raw)).items()}
+        except (ValueError, TypeError):
+            report_meta = {}
     return WorkflowRun(
         run_id=row["run_id"],
         workflow_id=row["workflow_id"],
@@ -85,4 +100,6 @@ def _run_from_row(row: sqlite3.Row) -> WorkflowRun:
         ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
         result=WorkflowRunResult(row["result"]),
         workflow_title=row["workflow_title"],
+        verdict=WorkflowVerdict(verdict_raw) if verdict_raw else WorkflowVerdict.NOT_EVALUATED,
+        report_meta=report_meta,
     )

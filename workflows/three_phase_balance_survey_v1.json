@@ -1,0 +1,79 @@
+{
+  "workflow_id": "three_phase_balance_survey_v1",
+  "title": "Three-Phase Balance Survey",
+  "description": "Sequentially capture L1, L2, and L3 line-to-line voltages and evaluate phase voltage unbalance.",
+  "category": "Power Quality",
+  "schema_version": 2,
+  "estimated_duration_min": 7,
+  "tags": [
+    "three-phase",
+    "voltage",
+    "unbalance",
+    "power-quality"
+  ],
+  "steps": [
+    {
+      "id": "safety_setup",
+      "title": "Safety And Setup",
+      "instruction": "SAFETY: Three-phase systems are hazardous. Confirm PPE and CAT rating for the system voltage. Measure line-to-line at the same reference points for each pair. Keep both hands behind the barrier.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Record panel/equipment ID and nominal system voltage."
+    },
+    {
+      "id": "measure_l1_l2",
+      "title": "Measure L1-L2",
+      "instruction": "Set the meter to AC voltage. Measure line-to-line voltage between L1 and L2. Capture the reading.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 180,
+        "max": 520,
+        "unit": "V",
+        "description": "Sanity band for common 208 V / 240 V / 480 V three-phase systems."
+      }
+    },
+    {
+      "id": "measure_l2_l3",
+      "title": "Measure L2-L3",
+      "instruction": "Measure line-to-line voltage between L2 and L3. Capture the reading.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "min": 180,
+        "max": 520,
+        "unit": "V"
+      }
+    },
+    {
+      "id": "measure_l3_l1",
+      "title": "Measure L3-L1",
+      "instruction": "Measure line-to-line voltage between L3 and L1. Capture the reading. The survey then evaluates voltage unbalance across all three pairs.",
+      "interaction_mode": "stable_capture",
+      "capture": true,
+      "expected_measurement_type": "voltage_ac",
+      "expected_unit": "V",
+      "acceptance": {
+        "reference_step_ids": [
+          "measure_l1_l2",
+          "measure_l2_l3"
+        ],
+        "relative_mode": "max_unbalance_percent",
+        "percent": 2,
+        "unit": "V",
+        "description": "Voltage unbalance across the three line-to-line pairs must stay within 2% (NEMA MG-1 recommends under 1%; motors should be derated above ~2%)."
+      },
+      "note_prompt": "Note any phase that is high or low."
+    },
+    {
+      "id": "record_survey",
+      "title": "Record Survey",
+      "instruction": "Document the unbalance result. Excessive voltage unbalance causes large current unbalance and motor overheating.",
+      "interaction_mode": "manual_check",
+      "note_prompt": "Summarize corrective actions if unbalance is high."
+    }
+  ]
+}

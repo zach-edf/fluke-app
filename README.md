@@ -61,7 +61,8 @@ What exists now:
   - session replay supports elapsed-time, UTC, and per-segment chart axes
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
-  - workflow run history can be reviewed and exported as reports from the desktop UI
+  - workflow capture steps support pass/fail acceptance criteria (absolute min/max plus relative percent-within, percent-drop, and phase-unbalance checks) with per-step and overall run verdicts
+  - workflow run history can be reviewed and exported as Markdown or professional PDF job reports from the desktop UI and CLI
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
@@ -141,7 +142,8 @@ Full contributor / desktop dependency set:
 - `requirements-full.txt`: desktop, plotting, dashboard/data extras, plus the base BLE runtime
 - package extras are also available through `pyproject.toml`:
   - `.[desktop]`: desktop UI and charting
-  - `.[full]`: desktop plus the current optional extras used in the repo
+  - `.[reports]`: PDF job/session report generation (`reportlab`)
+  - `.[full]`: desktop plus the current optional extras used in the repo (includes reports)
   - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
 ## Installation
@@ -423,15 +425,24 @@ The Workflows tab supports:
 - staged capture confirmation for pause-after-capture steps
 - recent workflow run history stored in SQLite
 - selecting recent runs to review historical step results
+- pass/fail verdicts shown per step and for the overall run
 - in-app workflow reports for the selected run
-- Markdown export of workflow run reports
+- Markdown export and professional PDF job-report export of workflow run reports
 
-Built-in workflow pack:
+Built-in workflow packs:
 
 - Battery Pack Check
 - Solar Panel Test
 - Charger Output Check
 - Continuity Checklist
+- Motor Inrush Baseline
+- Voltage Drop Under Load
+- Three-Phase Balance Survey
+- HVAC Capacitor Check
+- HVAC Amp Draw vs Nameplate
+- EV Charger (EVSE) Output Check
+- Solar String Open-Circuit Voltage Check
+- Receptacle Branch Circuit Survey
 
 ## Workflows
 
