@@ -11,7 +11,7 @@ from apps.cli._bootstrap import ensure_repo_paths
 ensure_repo_paths()
 
 from apps.cli import __version__
-from apps.cli.commands import alert, assets, debug, devices, fixtures, log, plugins, scan, sessions, stream, watch, workflow
+from apps.cli.commands import alert, assets, debug, devices, fixtures, log, plugins, scan, serve, sessions, stream, watch, workflow
 from apps.cli.runtime import configure_logging
 
 
@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     log.register(subparsers)
     plugins.register(subparsers)
     scan.register(subparsers)
+    serve.register(subparsers)
     sessions.register(subparsers)
     stream.register(subparsers)
     watch.register(subparsers)

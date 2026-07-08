@@ -67,7 +67,8 @@ What exists now:
 - shared alerting (`AlertEvaluator`) with high/low thresholds, out-of-band duration debounce, and reading-status / connection alerts, surfaced in both the CLI and desktop app (banner, beep, OS notification, and session markers)
 - spoken readings (text-to-speech) via a platform-native backend abstraction, with interval / on-stable / on-change / on-alert modes in the CLI and desktop
 - optional MQTT publishing (`.[mqtt]`) of readings plus availability (LWT) and Home Assistant MQTT Discovery, available from the CLI and SDK
-- CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
+- LAN-only live web view (`fluke serve`) so a helper can watch the live reading on their phone browser, no cloud or accounts
+- CLI for scan, stream, watch, alert, serve, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
 - hardware-free test coverage using fake BLE adapters and replay frames
@@ -149,7 +150,8 @@ Full contributor / desktop dependency set:
   - `.[reports]`: PDF job/session report generation (`reportlab`)
   - `.[mqtt]`: MQTT publishing / Home Assistant discovery (`paho-mqtt`)
   - `.[speech]`: optional cross-platform TTS backend (`pyttsx3`); native engines need no extra
-  - `.[full]`: desktop plus the current optional extras used in the repo (includes reports and MQTT)
+  - `.[web]`: LAN live web view (`fluke serve`): `aiohttp` + optional `qrcode`
+  - `.[full]`: desktop plus the current optional extras used in the repo (includes reports, MQTT, and web)
   - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
 ## Installation
@@ -298,6 +300,15 @@ Additional live terminal views:
 fluke watch --device "<DEVICE_ID>" --profile fluke_376fc
 fluke alert --device "<DEVICE_ID>" --profile fluke_376fc --high 120
 ```
+
+LAN live web view for a second person on a phone (trusted LAN only, read-only):
+
+```bash
+fluke serve --device "<DEVICE_ID>" --profile fluke_376fc
+```
+
+This prints the LAN URLs plus a scannable QR code and serves a mobile-first live
+page over WebSocket. See [docs/web-live-view.md](docs/web-live-view.md).
 
 ### 3. Log to SQLite and optionally export
 
@@ -703,7 +714,11 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/getting-started.md](docs/getting-started.md)
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
+<<<<<<< HEAD
 - [docs/assets-and-trending.md](docs/assets-and-trending.md)
+=======
+- [docs/web-live-view.md](docs/web-live-view.md)
+>>>>>>> feature/web-live-view
 - [docs/data-and-exports.md](docs/data-and-exports.md)
 - [docs/integrations.md](docs/integrations.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)

@@ -5,3 +5,4 @@
 -r requirements-data.txt
 -r requirements-reports.txt
 -r requirements-mqtt.txt
+-r requirements-web.txt

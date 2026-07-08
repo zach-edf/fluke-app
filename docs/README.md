@@ -11,6 +11,7 @@ If you are new to the repo, start with the guides below instead of reading the c
 - [Getting Started](getting-started.md): installation, requirements, first launch, and a suggested first-use path
 - [Desktop User Guide](desktop-guide.md): full walkthrough of the PySide6 desktop application
 - [CLI Guide](cli-guide.md): command reference, examples, and common terminal workflows
+- [LAN Live Web View](web-live-view.md): serve the live reading to a helper's phone browser over the local network (`fluke serve`)
 - [Workflows Page Guide](workflows-page.md): detailed explanation of guided workflow execution and workflow creation
 - [Assets and Trending Guide](assets-and-trending.md): attach sessions to equipment and trend its readings over time
 - [Data and Exports Guide](data-and-exports.md): where data is stored, what gets exported, and how export behavior works

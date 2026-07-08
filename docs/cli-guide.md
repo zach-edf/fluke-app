@@ -226,6 +226,46 @@ Options (shared by both commands):
 
 MQTT support requires the optional extra: `pip install -e ".[mqtt]"`.
 
+### `serve`
+
+Use this to serve a LAN-only live web view so a helper can watch the live
+reading from a phone browser on the same network. It connects, streams, and
+serves; on startup it prints the reachable URLs and a scannable terminal QR
+code.
+
+```powershell
+fluke serve --device "<DEVICE_ID>" --profile fluke_376fc
+```
+
+Options:
+
+- `--device`
+- `--profile`
+- `--port` (default `8765`)
+- `--host` (default `0.0.0.0`)
+- `--token` (optional shared-secret query-param gate)
+- `--stale-after` (seconds before data is flagged stale, default `3.0`)
+- `--read-only` (default; the web view never controls the meter)
+- `--duration`
+- `--no-qr`
+- `--log` and the log-related options (`--database`, `--title`, `--notes`,
+  `--tags`, `--csv-output`, `--json-output`)
+
+Examples:
+
+```powershell
+fluke serve --device "<DEVICE_ID>" --port 9000 --token s3cret
+fluke serve --device "<DEVICE_ID>" --host 127.0.0.1
+fluke serve --device "<DEVICE_ID>" --log --title "Panel check" --csv-output exports/panel.csv
+```
+
+Endpoints: `/` (page), `/ws` (WebSocket feed), `/api/status`, `/api/latest`.
+
+This is a trusted-LAN tool: it binds to all interfaces by default, has no
+authentication in v1 beyond the optional `--token` gate, uses plain HTTP, and is
+read-only by construction. See [LAN Live Web View](web-live-view.md) for the
+full guide and security notes.
+
 ### `log`
 
 Use this to record readings to SQLite and optionally export the session immediately.
@@ -727,3 +767,4 @@ Commands that commonly use the database:
 - [Assets and Trending Guide](assets-and-trending.md)
 - [Data and Exports Guide](data-and-exports.md)
 - [SDK Guide](sdk-guide.md)
+- [LAN Live Web View](web-live-view.md)
