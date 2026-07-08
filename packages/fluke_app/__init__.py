@@ -2,6 +2,12 @@
 
 from typing import TYPE_CHECKING, Any
 
+from fluke_app.alerts import (
+    AlertConfig,
+    AlertEvaluation,
+    AlertEvaluator,
+    AlertKind,
+)
 from fluke_app.bus import EventBus
 from fluke_app.device_logging import (
     build_logging_session_previews,
@@ -23,9 +29,20 @@ if TYPE_CHECKING:
     from fluke_app.reading_stream import ReadingStreamService
 
 __all__ = [
+    "AlertConfig",
+    "AlertEvaluation",
+    "AlertEvaluator",
+    "AlertKind",
     "DeviceManager",
     "EventBus",
     "ExportService",
+    "MqttConfig",
+    "MqttPublisher",
+    "SpeechConfig",
+    "SpeechMode",
+    "SpeechService",
+    "reading_to_speech_text",
+    "select_backend",
     "LOGGING_VALUE_SOURCES",
     "ReadingStreamService",
     "SessionRecorder",
@@ -68,4 +85,12 @@ def __getattr__(name: str) -> Any:
         from fluke_app.debug_bundle import export_debug_bundle as _export_debug_bundle
 
         return _export_debug_bundle
+    if name in {"SpeechConfig", "SpeechMode", "SpeechService", "reading_to_speech_text", "select_backend"}:
+        import fluke_app.speech_service as _speech
+
+        return getattr(_speech, name)
+    if name in {"MqttConfig", "MqttPublisher"}:
+        import fluke_app.mqtt_publisher as _mqtt
+
+        return getattr(_mqtt, name)
     raise AttributeError(name)
