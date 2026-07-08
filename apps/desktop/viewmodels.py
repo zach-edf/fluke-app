@@ -126,6 +126,9 @@ class LiveReadingViewModel:
     alert_active: bool = False
     alert_message: str = ""
     alert_event_id: int = 0
+    alert_audible: bool = True
+    alert_notify: bool = True
+    speech_status_text: str = "Spoken readings disabled."
     selected_chart_mode: str = "rolling_30s"
     chart_x_mode: str = "elapsed"
     chart_x_title: str = "Seconds"

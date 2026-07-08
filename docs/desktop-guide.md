@@ -163,23 +163,51 @@ Markers are later visible on the `Session` replay page.
 
 ### Alerts
 
-The live page supports value-based threshold alerts.
+The live page supports threshold, status, and connection alerts. Alarm logic is
+provided by the shared `AlertEvaluator` service, so the desktop and CLI behave
+identically. Alerts stay disabled until you arm them.
 
 Fields:
 
-- `Low`
-- `High`
-- `Set Alerts`
-- `Clear`
+- `Low`, `High` — value thresholds
+- `Debounce s` — require the value to stay out of band for N seconds before alerting
+- `Status alerts` — alert on over-range / no-signal reading status
+- `Beep` — play an audible beep when an alarm fires
+- `Notify` — show an OS notification (system tray) when an alarm fires
+- `Set Alerts`, `Clear`
 
 Behavior:
 
 - if a numeric low threshold is set, readings below it trigger a low alert
 - if a numeric high threshold is set, readings above it trigger a high alert
+- with a debounce value, a threshold breach must persist that long before firing
+  (momentary spikes are suppressed)
+- with `Status alerts` on, an over-range or no-signal reading raises an alert
 - invalid threshold text produces an alert configuration message
 - if both low and high are set, low must be less than high
-- new alert events cause an audible beep in the desktop UI
-- new alert events are also recorded as system markers in the active session
+- when an alarm fires, a prominent banner appears and (if enabled) the app beeps
+  and posts an OS notification
+- new alert events are also recorded as system markers in the active session so
+  they appear in replay and exports
+
+### Spoken readings (TTS)
+
+The live page can announce readings aloud using a platform-native engine
+(Windows SAPI, macOS `say`, Linux `espeak`, or `pyttsx3`).
+
+Fields:
+
+- `Speak readings` — enable/disable spoken readings
+- `Mode` — `Every interval`, `On stable`, `On change`, or `On alert only`
+- `Interval s` — seconds between spoken readings in interval mode
+
+Behavior:
+
+- readings are pronounced with unit expansion (e.g. `121.3 V` AC becomes
+  "one hundred twenty-one point three volts A C")
+- alert transitions are always announced when speech is enabled
+- if no text-to-speech engine is available, a status message says so and nothing
+  is spoken
 
 ### Live chart behavior
 

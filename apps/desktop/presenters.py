@@ -29,9 +29,14 @@ from apps.desktop.viewmodels import (
     WorkflowViewModel,
 )
 from fluke_app import (
+    AlertConfig,
+    AlertEvaluator,
     ExportService,
     ReportService,
     SessionRecorder,
+    SpeechConfig,
+    SpeechMode,
+    SpeechService,
     WorkflowRunner,
     build_logging_session_previews,
     clear_logging_data,
@@ -194,10 +199,12 @@ class AppPresenter:
         self._auto_reconnect_attempts = max(0, int(auto_reconnect_attempts))
         self._auto_reconnect_delay_s = max(0.0, float(auto_reconnect_delay_s))
         self._auto_reconnect_task: asyncio.Task[None] | None = None
-        self._alert_high: float | None = None
-        self._alert_low: float | None = None
-        self._active_alert_signature: str | None = None
+        # Alerts start fully disabled; the user arms them from the Live tab.
+        self._alert_evaluator = AlertEvaluator(AlertConfig(status_alerts=False, connection_alerts=False))
+        self._alert_audible = True
+        self._alert_notify = True
         self._alert_event_id = 0
+        self._speech = SpeechService(SpeechConfig(enabled=False))
         self._device_manager.subscribe_readings(self._recorder.on_reading)
         self._device_manager.subscribe_readings(self.on_reading)
         self._device_manager.subscribe_notifications(self.on_notification)
@@ -1604,6 +1611,7 @@ class AppPresenter:
         banner_text = ""
         self._last_reading_time = datetime.now(timezone.utc)
         alert_marker_message: str | None = None
+        speak_alert_message: str | None = None
         auto_commit_capture = False
         refresh_workflow_vm = False
         with self._lock:
@@ -1666,28 +1674,17 @@ class AppPresenter:
                 else:
                     self._workflow = replace(self._workflow, latest_capture_text=f"Latest live reading: {reading.display_text}")
                 refresh_workflow_vm = True
-            # Alert threshold check
-            alert_active = False
-            alert_message = ""
-            alert_signature: str | None = None
+            # Alert evaluation via the shared AlertEvaluator (value thresholds,
+            # out-of-band debounce, and reading-status alerts).
+            evaluation = self._alert_evaluator.evaluate(reading)
+            alert_active = evaluation.active
+            alert_message = evaluation.message
             alert_event_id = self._live.alert_event_id
-            if reading.value is not None:
-                if self._alert_high is not None and reading.value > self._alert_high:
-                    alert_active = True
-                    alert_message = f"HIGH ALERT: {reading.value:.4g} {reading.unit} exceeds {self._alert_high:.4g}"
-                    alert_signature = f"high:{self._alert_high}"
-                elif self._alert_low is not None and reading.value < self._alert_low:
-                    alert_active = True
-                    alert_message = f"LOW ALERT: {reading.value:.4g} {reading.unit} below {self._alert_low:.4g}"
-                    alert_signature = f"low:{self._alert_low}"
-            if alert_active and alert_signature != self._active_alert_signature:
+            if evaluation.just_triggered:
                 self._alert_event_id += 1
                 alert_event_id = self._alert_event_id
                 alert_marker_message = alert_message
-            elif not alert_active:
-                self._active_alert_signature = None
-            if alert_active:
-                self._active_alert_signature = alert_signature
+                speak_alert_message = alert_message
             self._live = replace(
                 self._live,
                 alert_active=alert_active,
@@ -1702,6 +1699,15 @@ class AppPresenter:
             )
         if alert_marker_message is not None:
             self._record_system_marker(alert_marker_message, label="alert")
+        # Speech is handled outside the lock: alerts always announce; otherwise
+        # the configured speech mode decides whether to speak the reading.
+        try:
+            if speak_alert_message is not None:
+                self._speech.speak_alert(speak_alert_message)
+            else:
+                self._speech.on_reading(reading)
+        except Exception:
+            pass
         if auto_commit_capture:
             try:
                 self.complete_workflow_step()
@@ -1732,21 +1738,76 @@ class AppPresenter:
                 ),
             )
 
-    def set_alert_thresholds(self, low: float | None, high: float | None) -> None:
-        """Set (or clear) value-based alert thresholds."""
-        if low is not None and high is not None and low >= high:
-            self.set_alert_configuration_error("low threshold must be less than high threshold.")
+    def set_alert_thresholds(
+        self,
+        low: float | None,
+        high: float | None,
+        *,
+        debounce_seconds: float | None = None,
+        status_alerts: bool | None = None,
+    ) -> None:
+        """Set (or clear) value-based alert thresholds and options."""
+        current = self._alert_evaluator.config
+        config = AlertConfig(
+            high=high,
+            low=low,
+            debounce_seconds=current.debounce_seconds if debounce_seconds is None else max(0.0, debounce_seconds),
+            status_alerts=current.status_alerts if status_alerts is None else status_alerts,
+            connection_alerts=current.connection_alerts,
+        )
+        try:
+            self._alert_evaluator.set_config(config)
+        except ValueError as exc:
+            self.set_alert_configuration_error(str(exc))
             return
-        self._alert_high = high
-        self._alert_low = low
-        self._active_alert_signature = None
         with self._lock:
             self._live = replace(
                 self._live,
                 alert_active=False,
                 alert_message="",
-                alert_status_text=_alert_status_text(low, high),
+                alert_status_text=_alert_status_text(low, high, config.debounce_seconds, config.status_alerts),
             )
+
+    def set_alert_notification_options(self, *, audible: bool | None = None, notify: bool | None = None) -> None:
+        """Toggle the desktop audible beep and OS tray notification for alerts."""
+        if audible is not None:
+            self._alert_audible = bool(audible)
+        if notify is not None:
+            self._alert_notify = bool(notify)
+        with self._lock:
+            self._live = replace(self._live, alert_audible=self._alert_audible, alert_notify=self._alert_notify)
+
+    def set_speech_config(
+        self,
+        *,
+        enabled: bool,
+        mode: str = "interval",
+        interval_seconds: float = 10.0,
+        change_delta: float = 1.0,
+    ) -> str:
+        """Configure spoken readings. Returns a human-readable status string."""
+        try:
+            speech_mode = SpeechMode(mode)
+        except ValueError:
+            speech_mode = SpeechMode.INTERVAL
+        self._speech.set_config(
+            SpeechConfig(
+                enabled=enabled,
+                mode=speech_mode,
+                interval_seconds=max(0.0, interval_seconds),
+                change_delta=max(0.0, change_delta),
+                speak_alerts=True,
+            )
+        )
+        if enabled and not self._speech.is_available():
+            status = "Speech unavailable: no platform TTS engine found."
+        elif enabled:
+            status = f"Speaking readings ({speech_mode.value}) via {self._speech.backend_name}."
+        else:
+            status = "Spoken readings disabled."
+        with self._lock:
+            self._live = replace(self._live, speech_status_text=status)
+        return status
 
     def set_alert_configuration_error(self, message: str) -> None:
         with self._lock:
@@ -2567,15 +2628,23 @@ def _format_delta(current_value: float | None, baseline_value: float | None, *, 
     return f"{prefix}{delta:.4g}{suffix}"
 
 
-def _alert_status_text(low: float | None, high: float | None) -> str:
-    if low is None and high is None:
-        return "Alerts disabled."
+def _alert_status_text(
+    low: float | None,
+    high: float | None,
+    debounce_seconds: float = 0.0,
+    status_alerts: bool = True,
+) -> str:
     parts: list[str] = []
     if low is not None:
         parts.append(f"low < {low:.4g}")
     if high is not None:
         parts.append(f"high > {high:.4g}")
-    return f"Alerts armed: {', '.join(parts)}."
+    if status_alerts:
+        parts.append("status")
+    if not parts:
+        return "Alerts disabled."
+    suffix = f" (debounce {debounce_seconds:.4g}s)" if debounce_seconds else ""
+    return f"Alerts armed: {', '.join(parts)}{suffix}."
 
 
 def _reading_channel_role(reading: Reading) -> str:

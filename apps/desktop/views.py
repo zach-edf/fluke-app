@@ -25,6 +25,7 @@ from apps.desktop._qt import (
     QScrollArea,
     QShortcut,
     QSpinBox,
+    QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -43,6 +44,27 @@ from fluke_core.models.workflow import WorkflowCaptureSettings, WorkflowDefiniti
 class _PanelRefs:
     panel: object
     refs: dict[str, object]
+
+
+def _notify_alert(window: QWidget, message: str) -> None:
+    """Show an OS notification for an alert via a lazily created tray icon."""
+    if not message:
+        return
+    try:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = getattr(window, "_alert_tray_icon", None)
+        if tray is None:
+            app = QApplication.instance()
+            icon = app.windowIcon() if app is not None else None
+            tray = QSystemTrayIcon(icon, window) if icon is not None and not icon.isNull() else QSystemTrayIcon(window)
+            tray.setToolTip("Fluke Community alerts")
+            tray.show()
+            setattr(window, "_alert_tray_icon", tray)
+        tray.showMessage("Fluke Alert", message, QSystemTrayIcon.MessageIcon.Warning, 5000)
+    except Exception:
+        # Notifications are best-effort; never let them break the UI update.
+        return
 
 
 @dataclass(slots=True)
@@ -907,6 +929,19 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     alert_high_input = QLineEdit()
     alert_high_input.setPlaceholderText("High threshold")
     alert_high_input.setFixedWidth(120)
+    alert_debounce_input = QLineEdit()
+    alert_debounce_input.setPlaceholderText("Debounce s")
+    alert_debounce_input.setFixedWidth(90)
+    alert_debounce_input.setToolTip("Require the value to stay out of band for N seconds before alerting")
+    alert_status_checkbox = QCheckBox("Status alerts")
+    alert_status_checkbox.setChecked(True)
+    alert_status_checkbox.setToolTip("Alert on over-range / no-signal reading status")
+    alert_audible_checkbox = QCheckBox("Beep")
+    alert_audible_checkbox.setChecked(True)
+    alert_audible_checkbox.setToolTip("Play an audible beep when an alarm fires")
+    alert_notify_checkbox = QCheckBox("Notify")
+    alert_notify_checkbox.setChecked(True)
+    alert_notify_checkbox.setToolTip("Show an OS notification when an alarm fires")
     alert_apply_button = QPushButton("Set Alerts")
     alert_apply_button.setToolTip("Set value alert thresholds (leave blank to disable)")
     alert_clear_button = QPushButton("Clear")
@@ -915,22 +950,66 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     def _apply_alerts() -> None:
         low_text = alert_low_input.text().strip()
         high_text = alert_high_input.text().strip()
+        debounce_text = alert_debounce_input.text().strip()
         try:
             low = float(low_text) if low_text else None
             high = float(high_text) if high_text else None
+            debounce = float(debounce_text) if debounce_text else 0.0
         except ValueError:
             runtime.presenter.set_alert_configuration_error("thresholds must be numeric values.")
             return
-        runtime.presenter.set_alert_thresholds(low, high)
+        runtime.presenter.set_alert_thresholds(
+            low,
+            high,
+            debounce_seconds=debounce,
+            status_alerts=alert_status_checkbox.isChecked(),
+        )
+        runtime.presenter.set_alert_notification_options(
+            audible=alert_audible_checkbox.isChecked(),
+            notify=alert_notify_checkbox.isChecked(),
+        )
 
     alert_apply_button.clicked.connect(lambda: _safe_call(runtime, _apply_alerts))
     alert_clear_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: (
-            runtime.presenter.set_alert_thresholds(None, None),
+            runtime.presenter.set_alert_thresholds(None, None, debounce_seconds=0.0),
             alert_low_input.clear(),
             alert_high_input.clear(),
+            alert_debounce_input.clear(),
         ))
     )
+
+    # Spoken readings (TTS) controls
+    speech_checkbox = QCheckBox("Speak readings")
+    speech_checkbox.setToolTip("Announce readings aloud using platform text-to-speech")
+    speech_mode = QComboBox()
+    speech_mode.addItem("Every interval", "interval")
+    speech_mode.addItem("On stable", "on_stable")
+    speech_mode.addItem("On change", "on_change")
+    speech_mode.addItem("On alert only", "on_alert")
+    speech_interval_input = QLineEdit()
+    speech_interval_input.setPlaceholderText("Interval s")
+    speech_interval_input.setFixedWidth(90)
+    speech_interval_input.setText("10")
+    speech_status = QLabel("Spoken readings disabled.")
+    speech_status.setWordWrap(True)
+    speech_status.setObjectName("speech_status")
+
+    def _apply_speech() -> None:
+        interval_text = speech_interval_input.text().strip()
+        try:
+            interval = float(interval_text) if interval_text else 10.0
+        except ValueError:
+            interval = 10.0
+        runtime.presenter.set_speech_config(
+            enabled=speech_checkbox.isChecked(),
+            mode=speech_mode.currentData(),
+            interval_seconds=interval,
+        )
+
+    speech_checkbox.toggled.connect(lambda: _safe_call(runtime, _apply_speech))
+    speech_mode.currentIndexChanged.connect(lambda: _safe_call(runtime, _apply_speech))
+    speech_interval_input.editingFinished.connect(lambda: _safe_call(runtime, _apply_speech))
 
     marker_input = QLineEdit()
     marker_input.setPlaceholderText("Add a marker note during logging")
@@ -1016,9 +1095,20 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
     alert_row.addWidget(alert_low_input)
     alert_row.addWidget(QLabel("High:"))
     alert_row.addWidget(alert_high_input)
+    alert_row.addWidget(alert_debounce_input)
+    alert_row.addWidget(alert_status_checkbox)
+    alert_row.addWidget(alert_audible_checkbox)
+    alert_row.addWidget(alert_notify_checkbox)
     alert_row.addWidget(alert_apply_button)
     alert_row.addWidget(alert_clear_button)
     alert_row.addStretch()
+
+    speech_row = QHBoxLayout()
+    speech_row.addWidget(speech_checkbox)
+    speech_row.addWidget(QLabel("Mode:"))
+    speech_row.addWidget(speech_mode)
+    speech_row.addWidget(speech_interval_input)
+    speech_row.addStretch()
 
     marker_row = QHBoxLayout()
     marker_row.addWidget(marker_input, 1)
@@ -1046,6 +1136,8 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
         device_panel_layout.addWidget(widget)
     device_panel_layout.addWidget(chart.widget, 1)
     device_panel_layout.addLayout(alert_row)
+    device_panel_layout.addLayout(speech_row)
+    device_panel_layout.addWidget(speech_status)
 
     family_panel = QWidget()
     family_panel_layout = QVBoxLayout(family_panel)
@@ -1122,6 +1214,7 @@ def _live_panel(window: QWidget, runtime) -> _PanelRefs:
             "disconnect_button": disconnect_button,
             "chart": chart,
             "chart_mode": chart_mode,
+            "speech_status": speech_status,
             "last_alert_event_id": 0,
         },
     )
@@ -1899,9 +1992,14 @@ def _refresh_live(runtime, panel: _PanelRefs) -> None:
     alert_banner = panel.refs["alert_banner"]
     alert_banner.setText(live.alert_message)
     alert_banner.setVisible(live.alert_active)
+    if "speech_status" in panel.refs:
+        panel.refs["speech_status"].setText(live.speech_status_text)
     last_alert_event_id = panel.refs.get("last_alert_event_id", 0)
     if live.alert_active and live.alert_event_id > last_alert_event_id:
-        QApplication.beep()
+        if live.alert_audible:
+            QApplication.beep()
+        if live.alert_notify:
+            _notify_alert(window, live.alert_message)
     panel.refs["last_alert_event_id"] = live.alert_event_id
     panel.refs["chart"].set_data(
         live.chart_points, live.marker_points,

@@ -6,9 +6,11 @@ import sys
 
 from apps.cli.formatters import format_reading, nonneg_float, nonneg_int, parse_tags
 from apps.cli.runtime import (
+    add_mqtt_arguments,
     add_reconnect_flag,
     attach_connection_diagnostics,
     build_device_manager,
+    build_mqtt_publisher,
     default_database_path,
     open_store,
 )
@@ -31,6 +33,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.add_argument("--json-output", default=None, help="Optional export path for session JSON")
     parser.add_argument("--quiet", action="store_true", help="Do not print each reading while logging")
     add_reconnect_flag(parser)
+    add_mqtt_arguments(parser)
     parser.set_defaults(func=handle)
 
 
@@ -44,6 +47,7 @@ async def handle(args: argparse.Namespace) -> int:
     # visible in the recorded session even if reconnect succeeds mid-run.
     connection_markers = SessionConnectionMarkers(recorder)
     manager.subscribe_connection_diagnostics(connection_markers.handle_status)
+    publisher = build_mqtt_publisher(args)
 
     recorded = 0
     finished = asyncio.Event()
@@ -53,6 +57,8 @@ async def handle(args: argparse.Namespace) -> int:
         nonlocal recorded
         recorder.on_reading(reading)
         recorded += 1
+        if publisher is not None:
+            publisher.publish_reading(reading)
         if not args.quiet:
             print(format_reading(reading))
         if args.count and recorded >= args.count:
@@ -69,6 +75,14 @@ async def handle(args: argparse.Namespace) -> int:
         print(f"Connecting to {args.device}...", file=sys.stderr)
         device = await manager.establish_session(args.device, profile_id=args.profile)
         store.upsert_device(device)
+
+        if publisher is not None:
+            try:
+                publisher.connect(device.device_id, device=device)
+                print(f"Publishing readings to MQTT broker {args.mqtt_host}.", file=sys.stderr)
+            except Exception as exc:
+                print(f"Warning: MQTT publishing disabled ({exc}).", file=sys.stderr)
+                publisher = None
 
         session = recorder.start(
             new_session(
@@ -97,6 +111,11 @@ async def handle(args: argparse.Namespace) -> int:
     finally:
         completed = recorder.stop()
         await manager.disconnect()
+        if publisher is not None:
+            try:
+                publisher.disconnect()
+            except Exception:
+                pass
         store.close()
 
     if completed is None:

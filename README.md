@@ -63,6 +63,9 @@ What exists now:
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow capture steps support pass/fail acceptance criteria (absolute min/max plus relative percent-within, percent-drop, and phase-unbalance checks) with per-step and overall run verdicts
   - workflow run history can be reviewed and exported as Markdown or professional PDF job reports from the desktop UI and CLI
+- shared alerting (`AlertEvaluator`) with high/low thresholds, out-of-band duration debounce, and reading-status / connection alerts, surfaced in both the CLI and desktop app (banner, beep, OS notification, and session markers)
+- spoken readings (text-to-speech) via a platform-native backend abstraction, with interval / on-stable / on-change / on-alert modes in the CLI and desktop
+- optional MQTT publishing (`.[mqtt]`) of readings plus availability (LWT) and Home Assistant MQTT Discovery, available from the CLI and SDK
 - CLI for scan, stream, watch, alert, log, sessions, workflows, plugins, fixture capture, BLE probing, and debug bundle export
 - Python SDK on the same core stack
 - plugin loader for contributed profiles and workflow JSON packs
@@ -143,7 +146,9 @@ Full contributor / desktop dependency set:
 - package extras are also available through `pyproject.toml`:
   - `.[desktop]`: desktop UI and charting
   - `.[reports]`: PDF job/session report generation (`reportlab`)
-  - `.[full]`: desktop plus the current optional extras used in the repo (includes reports)
+  - `.[mqtt]`: MQTT publishing / Home Assistant discovery (`paho-mqtt`)
+  - `.[speech]`: optional cross-platform TTS backend (`pyttsx3`); native engines need no extra
+  - `.[full]`: desktop plus the current optional extras used in the repo (includes reports and MQTT)
   - `.[dev]`: same dependency set as `.[full]` for contributors and CI
 
 ## Installation
@@ -669,6 +674,7 @@ For more first-run guidance, see [docs/getting-started.md](docs/getting-started.
 - [docs/desktop-guide.md](docs/desktop-guide.md)
 - [docs/cli-guide.md](docs/cli-guide.md)
 - [docs/data-and-exports.md](docs/data-and-exports.md)
+- [docs/integrations.md](docs/integrations.md)
 - [docs/sdk-guide.md](docs/sdk-guide.md)
 - [docs/workflows-page.md](docs/workflows-page.md)
 - [docs/developer/README.md](docs/developer/README.md)

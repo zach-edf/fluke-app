@@ -36,6 +36,12 @@ data = [
 reports = [
   "reportlab>=4.0",
 ]
+mqtt = [
+  "paho-mqtt>=2.0",
+]
+speech = [
+  "pyttsx3>=2.90",
+]
 full = [
   "PySide6>=6.7",
   "matplotlib>=3.9",
@@ -43,6 +49,7 @@ full = [
   "pandas>=2.2",
   "pyarrow>=16",
   "reportlab>=4.0",
+  "paho-mqtt>=2.0",
 ]
 dev = [
   "PySide6>=6.7",
@@ -51,6 +58,7 @@ dev = [
   "pandas>=2.2",
   "pyarrow>=16",
   "reportlab>=4.0",
+  "paho-mqtt>=2.0",
 ]
 
 [project.scripts]

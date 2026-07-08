@@ -718,6 +718,64 @@ class DesktopPresenterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             store.close()
 
+    async def test_presenter_status_alerts_and_speech_integration(self) -> None:
+        tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
+        tmp = tmp_root / uuid4().hex
+        tmp.mkdir(parents=True, exist_ok=False)
+
+        store = FlukeStore(tmp / "desktop-status-speech.db")
+        adapter = FakeBleAdapter(
+            devices=[
+                BleDevice(
+                    id="meter-status-speech",
+                    name="Fluke 376 FC",
+                    address="AA:BB:CC:DD:EE:AA",
+                    rssi=-43,
+                    metadata={"advertisement_name": "Fluke 376 FC"},
+                )
+            ]
+        )
+        manager = DeviceManager(adapter, ProfileRegistry([Fluke376FCProfile()]))
+        presenter = AppPresenter(manager, store)
+
+        class _FakeBackend:
+            name = "fake"
+
+            def __init__(self) -> None:
+                self.spoken: list[str] = []
+
+            def available(self) -> bool:
+                return True
+
+            def speak(self, text: str) -> None:
+                self.spoken.append(text)
+
+        backend = _FakeBackend()
+        presenter._speech.set_backend(backend)  # type: ignore[attr-defined]
+
+        try:
+            await presenter.scan_devices(timeout_s=0.1)
+            await presenter.connect_device("meter-status-speech")
+            # Arm status alerts (no numeric thresholds) and enable alert speech.
+            presenter.set_alert_thresholds(None, None, status_alerts=True)
+            status = presenter.set_speech_config(enabled=True, mode="on_alert")
+            self.assertIn("on_alert", status)
+
+            over_range = ReplayScenario(
+                (
+                    ReplayFrame(FLUKE_STATUS_UUID, bytes([0x18])),
+                    ReplayFrame(FLUKE_MEAS_UUID, measurement_payload("OL", "dc")),
+                )
+            )
+            await over_range.run(adapter, "meter-status-speech")
+            live = presenter.live_view_model()
+            self.assertTrue(live.alert_active)
+            self.assertIn("STATUS ALERT", live.alert_message)
+            # The alert was announced via the injected speech backend.
+            self.assertTrue(any("STATUS ALERT" in text for text in backend.spoken))
+        finally:
+            store.close()
+
     async def test_presenter_rejects_invalid_alert_thresholds_without_clearing_existing_config(self) -> None:
         tmp_root = Path(__file__).resolve().parents[2] / ".test-tmp"
         tmp = tmp_root / uuid4().hex
