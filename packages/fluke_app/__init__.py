@@ -13,6 +13,13 @@ from fluke_app.device_logging import (
     read_logging_status,
     write_logging_config,
 )
+from fluke_app.asset_trend_service import (
+    AssetTrend,
+    AssetTrendService,
+    TrendPoint,
+    TrendSeries,
+    export_asset_trend_csv,
+)
 from fluke_app.export_service import ExportService
 from fluke_app.session_recorder import SessionRecorder, new_session
 from fluke_app.workflow_catalog import WorkflowCatalog, default_workflow_directory, load_workflow_catalog
@@ -23,9 +30,14 @@ if TYPE_CHECKING:
     from fluke_app.reading_stream import ReadingStreamService
 
 __all__ = [
+    "AssetTrend",
+    "AssetTrendService",
     "DeviceManager",
     "EventBus",
     "ExportService",
+    "TrendPoint",
+    "TrendSeries",
+    "export_asset_trend_csv",
     "LOGGING_VALUE_SOURCES",
     "ReadingStreamService",
     "SessionRecorder",

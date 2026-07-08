@@ -32,6 +32,12 @@ class SessionRepository(Protocol):
     def list_recent(self, limit: int = 20) -> list[Session]:
         ...
 
+    def list_for_asset(self, asset_id: str, limit: int = 500) -> list[Session]:
+        ...
+
+    def assign_asset(self, session_id: str, asset_id: str | None) -> None:
+        ...
+
 
 class ReadingRepository(Protocol):
     def append(self, session_id: str, reading: Reading) -> None:

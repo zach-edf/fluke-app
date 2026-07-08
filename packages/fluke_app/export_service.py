@@ -122,6 +122,18 @@ class ExportService:
         export_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
         return str(export_path)
 
+    def export_asset_trend_csv(self, asset_id: str, path: str | Path) -> str:
+        # Imported lazily to avoid a circular import (asset_trend_service imports
+        # the grouping/normalization helpers from this module).
+        from fluke_app.asset_trend_service import (
+            AssetTrendService,
+            export_asset_trend_csv,
+        )
+
+        service = AssetTrendService(self._session_repo, self._reading_repo)
+        trend = service.build_trend(asset_id)
+        return export_asset_trend_csv(trend, path)
+
     def _load(self, session_id: str) -> tuple[object, list[object]]:
         session = self._session_repo.get(session_id)
         if session is None:
