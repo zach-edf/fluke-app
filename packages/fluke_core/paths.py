@@ -47,6 +47,22 @@ def bundled_data_dir(name: str) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def default_export_directory(app_name: str = "Fluke Community") -> Path:
+    """Return where user-facing exports (CSV/JSON/PDF/PNG) should land by default.
+
+    Source checkouts keep the repo-relative ``exports`` directory. Packaged
+    builds must not write into the install directory (hard to find, possibly
+    read-only), so they default to a folder under the user's Documents, falling
+    back to the app data dir when Documents does not exist.
+    """
+    if not is_frozen():
+        return Path("exports")
+    documents = Path.home() / "Documents"
+    if documents.exists():
+        return documents / app_name
+    return user_data_dir() / "exports"
+
+
 def user_data_dir(app_name: str = "fluke-community") -> Path:
     """Return the platform user data directory for this app.
 

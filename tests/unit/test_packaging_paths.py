@@ -61,3 +61,22 @@ class FrozenPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultExportDirectoryTests(unittest.TestCase):
+    def test_source_checkout_keeps_relative_exports(self) -> None:
+        self.assertEqual(paths.default_export_directory(), Path("exports"))
+
+    def test_frozen_prefers_documents(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
+            Path, "exists", return_value=True
+        ):
+            resolved = paths.default_export_directory()
+        self.assertEqual(resolved, Path.home() / "Documents" / "Fluke Community")
+
+    def test_frozen_falls_back_to_user_data_dir_without_documents(self) -> None:
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
+            Path, "exists", return_value=False
+        ):
+            resolved = paths.default_export_directory()
+        self.assertEqual(resolved, paths.user_data_dir() / "exports")

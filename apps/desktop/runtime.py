@@ -9,6 +9,7 @@ from typing import Any
 from apps.cli.runtime import default_database_path
 from apps.desktop.presenters import AppPresenter
 from fluke_app import DeviceManager, EventBus, ReadingStreamService, load_workflow_catalog
+from fluke_core.paths import default_export_directory
 from fluke_plugins import load_plugin_bundle
 from fluke_protocol import ProfileRegistry
 from fluke_store import FlukeStore
@@ -123,6 +124,7 @@ def build_runtime(
             manager,
             store,
             app_version=app_version,
+            export_directory=default_export_directory(),
             workflow_catalog=workflow_catalog,
             workflow_extra_paths=plugin_bundle.workflow_paths,
         ),
