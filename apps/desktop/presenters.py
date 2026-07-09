@@ -45,7 +45,8 @@ from fluke_app import (
     WorkflowRunner,
     build_logging_session_previews,
     clear_logging_data,
-    default_workflow_directory,
+    save_workflow_definition,
+    user_workflow_directory,
     download_logging_data,
     import_logging_sessions,
     load_workflow_catalog,
@@ -179,10 +180,11 @@ class AppPresenter:
             diagnostics_text="PySide6 and BLE runtime configured.",
             auto_reconnect_enabled=bool(getattr(device_manager, "auto_reconnect_enabled", lambda: True)()),
         )
-        self._workflow_directory = default_workflow_directory()
+        # New/customized workflows are written to the per-user directory so the
+        # feature works from packaged builds where the install dir is read-only.
+        self._workflow_directory = user_workflow_directory()
         self._workflow_extra_paths = tuple(Path(path) for path in workflow_extra_paths)
         self._workflow_catalog = workflow_catalog or load_workflow_catalog(
-            self._workflow_directory,
             extra_paths=self._workflow_extra_paths,
         )
         self._workflow_runner = WorkflowRunner(
@@ -1482,19 +1484,14 @@ class AppPresenter:
                 raise RuntimeError(f"Workflow step {step.step_id!r} is missing instructions.")
             seen_step_ids.add(step.step_id)
 
-        self._workflow_directory.mkdir(parents=True, exist_ok=True)
-        path = self._workflow_directory / f"{definition.workflow_id}.json"
-        if path.exists():
-            raise RuntimeError(f"Workflow file already exists: {path.name}")
-
-        path.write_text(
-            json.dumps(_workflow_definition_payload(definition), indent=2, ensure_ascii=True) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            path = save_workflow_definition(definition, self._workflow_directory)
+        except FileExistsError as exc:
+            raise RuntimeError(f"Workflow file already exists: {Path(str(exc)).name}") from exc
         self._workflow_catalog = load_workflow_catalog(
-            self._workflow_directory,
             extra_paths=self._workflow_extra_paths,
         )
+        self._workflow_runner.set_catalog(self._workflow_catalog)
         with self._lock:
             self._workflow = replace(
                 self._workflow,
@@ -1504,6 +1501,47 @@ class AppPresenter:
         self._workflow_status_message = f"Created workflow {definition.title}."
         self.refresh_workflows()
         return str(path)
+
+    def customize_workflow(self, workflow_id: str | None = None) -> str:
+        """Copy a workflow into the user directory so its limits can be edited.
+
+        The user-directory copy overrides the built-in pack with the same id on
+        the next catalog load. Returns the path of the editable JSON file; if a
+        customized copy already exists it is returned untouched.
+        """
+        target = workflow_id
+        if target is None:
+            with self._lock:
+                target = self._workflow.selected_workflow_id
+        if target is None:
+            raise RuntimeError("Select a workflow to customize.")
+        definition = self._workflow_catalog.get(target)
+        if definition is None:
+            raise RuntimeError(f"Unknown workflow {target!r}.")
+        try:
+            path = save_workflow_definition(definition, self._workflow_directory)
+        except FileExistsError as exc:
+            self._workflow_status_message = f"Customized copy already exists: {definition.title}."
+            return str(exc)
+        self._workflow_catalog = load_workflow_catalog(
+            extra_paths=self._workflow_extra_paths,
+        )
+        self._workflow_runner.set_catalog(self._workflow_catalog)
+        self._workflow_status_message = (
+            f"Customizable copy of {definition.title} created. Edit the JSON to adjust limits, "
+            "then reload workflows."
+        )
+        self.refresh_workflows()
+        return str(path)
+
+    def reload_workflow_catalog(self) -> None:
+        """Re-read built-in, plugin, and user workflow definitions from disk."""
+        self._workflow_catalog = load_workflow_catalog(
+            extra_paths=self._workflow_extra_paths,
+        )
+        self._workflow_runner.set_catalog(self._workflow_catalog)
+        self._workflow_status_message = "Workflows reloaded."
+        self.refresh_workflows()
 
     def complete_workflow_step(self, note: str | None = None) -> str:
         current = self._workflow_runner.active_state()
@@ -3563,50 +3601,3 @@ def _workflow_interaction_mode_text(step: WorkflowStep) -> str:
     return mapping.get(step.interaction_mode, step.interaction_mode.value.replace("_", " ").title())
 
 
-def _workflow_definition_payload(definition: WorkflowDefinition) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "workflow_id": definition.workflow_id,
-        "title": definition.title,
-        "description": definition.description,
-        "category": definition.category,
-        "tags": list(definition.tags),
-        "steps": [],
-    }
-    if definition.estimated_duration_min is not None:
-        payload["estimated_duration_min"] = definition.estimated_duration_min
-
-    step_payloads: list[dict[str, object]] = []
-    for step in definition.steps:
-        row: dict[str, object] = {
-            "id": step.step_id,
-            "title": step.title,
-            "instruction": step.instruction,
-            "capture": step.capture,
-            "interaction_mode": step.interaction_mode.value,
-            "advance_on_capture": step.advance_on_capture,
-        }
-        if step.expected_measurement_type is not None:
-            row["expected_measurement_type"] = _measurement_type_value(step.expected_measurement_type)
-        if step.expected_unit:
-            row["expected_unit"] = step.expected_unit
-        if step.note_prompt:
-            row["note_prompt"] = step.note_prompt
-        if step.requires_reading:
-            row["capture_settings"] = {
-                "stable_for_s": step.capture_settings.stable_for_s,
-                "min_samples": step.capture_settings.min_samples,
-                "relative_tolerance": step.capture_settings.relative_tolerance,
-                "absolute_tolerance": step.capture_settings.absolute_tolerance,
-                "countdown_s": step.capture_settings.countdown_s,
-            }
-        if step.metadata:
-            row["metadata"] = dict(step.metadata)
-        step_payloads.append(row)
-    payload["steps"] = step_payloads
-    return payload
-
-
-def _measurement_type_value(value: MeasurementType | str) -> str:
-    if isinstance(value, MeasurementType):
-        return value.value
-    return str(value)

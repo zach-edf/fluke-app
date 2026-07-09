@@ -517,6 +517,26 @@ The customer/site/job/technician/business metadata is persisted with the run so
 later reports reuse it. PDF rendering requires the `reportlab` package (install
 the `.[reports]` or `.[full]` extra).
 
+### `workflow customize`
+
+Copies a workflow into your per-user workflow directory so you can edit its
+steps and pass/fail acceptance limits. The copy overrides the built-in workflow
+with the same id on the next run; the install directory is never modified.
+
+```powershell
+fluke workflow customize --workflow voltage_drop_under_load_v1
+```
+
+Options:
+
+- `--workflow` (required): workflow id from `fluke workflow list`
+- `--force`: overwrite an existing customized copy with the built-in defaults
+
+The per-user directory is `%LOCALAPPDATA%\fluke-community\workflows` on Windows,
+`~/Library/Application Support/fluke-community/workflows` on macOS, and
+`~/.local/share/fluke-community/workflows` on Linux. See
+[Workflows Page Guide](workflows-page.md) for the JSON limit syntax.
+
 For deeper workflow semantics and the desktop workflow page, see [Workflows Page Guide](workflows-page.md).
 
 ### `devices supported`

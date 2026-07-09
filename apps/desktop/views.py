@@ -1736,6 +1736,12 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     start_button.setToolTip("Start the selected workflow")
     new_workflow_button = QPushButton("New Workflow")
     new_workflow_button.setToolTip("Create a new workflow definition from the desktop app")
+    customize_button = QPushButton("Customize Limits")
+    customize_button.setToolTip(
+        "Copy the selected workflow to your user folder so you can edit its steps and pass/fail limits"
+    )
+    reload_workflows_button = QPushButton("Reload Workflows")
+    reload_workflows_button.setToolTip("Re-read built-in, plugin, and customized workflow files from disk")
     complete_button = QPushButton("Complete Step")
     complete_button.setToolTip("Complete the current workflow step and capture reading")
     continue_button = QPushButton("Continue")
@@ -1763,6 +1769,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     recent_runs.itemSelectionChanged.connect(on_recent_run_changed)
     start_button.clicked.connect(lambda: _safe_call(runtime, lambda: runtime.presenter.start_workflow()))
     new_workflow_button.clicked.connect(lambda: _open_workflow_builder(window, runtime))
+    customize_button.clicked.connect(lambda: _customize_workflow(window, runtime))
+    reload_workflows_button.clicked.connect(lambda: _safe_call(runtime, runtime.presenter.reload_workflow_catalog))
     complete_button.clicked.connect(
         lambda: _safe_call(runtime, lambda: _complete_workflow_step(runtime, note_input))
     )
@@ -1804,6 +1812,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
     left.addWidget(workflow_list)
     left.addWidget(start_button)
     left.addWidget(new_workflow_button)
+    left.addWidget(customize_button)
+    left.addWidget(reload_workflows_button)
 
     actions = QHBoxLayout()
     actions.addWidget(complete_button)
@@ -1854,6 +1864,8 @@ def _workflow_panel(window: QWidget, runtime) -> _PanelRefs:
             "note_input": note_input, "completed_steps": completed_steps,
             "recent_runs": recent_runs,
             "start_button": start_button, "new_workflow_button": new_workflow_button,
+            "customize_button": customize_button,
+            "reload_workflows_button": reload_workflows_button,
             "complete_button": complete_button,
             "continue_button": continue_button,
             "retake_button": retake_button,
@@ -2289,6 +2301,7 @@ def _refresh_workflow(runtime, panel: _PanelRefs) -> None:
         report_view.setPlainText(workflow.report_text)
 
     panel.refs["start_button"].setEnabled(workflow.selected_workflow_id is not None and not workflow.is_running)
+    panel.refs["customize_button"].setEnabled(workflow.selected_workflow_id is not None)
     panel.refs["complete_button"].setText(workflow.primary_action_text)
     panel.refs["complete_button"].setEnabled(workflow.is_running)
     panel.refs["continue_button"].setEnabled(workflow.can_continue_capture)
@@ -2662,6 +2675,29 @@ def _export_chart_with_dialog(window: QWidget, runtime, chart, path: Path) -> No
         _info(window, "Export Complete", f"Chart saved to:\n{exported}")
     except Exception as exc:
         runtime.presenter.report_error(str(exc))
+
+
+def _customize_workflow(window: QWidget, runtime) -> None:
+    try:
+        path = runtime.presenter.customize_workflow()
+    except Exception as exc:
+        runtime.presenter.report_error(str(exc))
+        return
+    _info(
+        window,
+        "Workflow Copied For Customization",
+        "An editable copy was saved to your user workflows folder:\n\n"
+        f"{path}\n\n"
+        "Edit the JSON (e.g. the per-step \"acceptance\" limits), then click "
+        "Reload Workflows. Your copy overrides the built-in workflow with the same id.",
+    )
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    except Exception:
+        pass  # opening an editor is a convenience; the dialog already shows the path
 
 
 def _export_and_notify(window: QWidget, runtime, func, format_label: str) -> None:

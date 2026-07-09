@@ -433,6 +433,33 @@ instructions for a 376 FC-class clamp meter:
 - Solar String Open-Circuit Voltage Check
 - Receptacle Branch Circuit Survey
 
+## Customizing Built-In Limits (User Workflow Directory)
+
+The acceptance limits shipped in the built-in trade packs (voltage-drop percent,
+phase unbalance percent, capacitor tolerance, and so on) are defaults. To adjust
+them, copy a pack into your per-user workflow directory and edit the copy — the
+copy overrides the built-in workflow with the same `workflow_id` on the next
+catalog load. The install directory is never modified, so this works from
+packaged installer builds too.
+
+Per-user workflow directory:
+
+- Windows: `%LOCALAPPDATA%\fluke-community\workflows`
+- macOS: `~/Library/Application Support/fluke-community/workflows`
+- Linux: `~/.local/share/fluke-community/workflows` (or `$XDG_DATA_HOME`)
+
+Three ways to create the editable copy:
+
+- Desktop: select the workflow and click `Customize Limits`. The app writes the
+  copy, shows the path, and opens it in your default editor. After editing,
+  click `Reload Workflows`.
+- CLI: `fluke workflow customize --workflow voltage_drop_under_load_v1`
+- Manually: drop any valid workflow JSON into the directory above. A file whose
+  `workflow_id` matches a built-in replaces it; a new id adds a new workflow.
+
+To revert to the shipped defaults, delete the file from the user directory and
+reload.
+
 ## Creating New Workflows Manually
 
 You can also create workflows without the GUI by adding a JSON file directly to [`workflows/`](../workflows).

@@ -23,6 +23,10 @@ class WorkflowRunner:
         self._step_result_repo = step_result_repo
         self._active_run_id: str | None = None
 
+    def set_catalog(self, catalog: WorkflowCatalog) -> None:
+        """Swap the catalog after a reload so new/customized workflows are startable."""
+        self._catalog = catalog
+
     def start(self, workflow_id: str, session_id: str, *, started_at: datetime | None = None) -> WorkflowRunState:
         active = self.active_state()
         if active is not None and not active.is_complete:

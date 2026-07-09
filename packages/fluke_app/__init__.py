@@ -29,7 +29,14 @@ from fluke_app.asset_trend_service import (
 from fluke_app.export_service import ExportService
 from fluke_app.report_service import ReportService
 from fluke_app.session_recorder import SessionRecorder, new_session
-from fluke_app.workflow_catalog import WorkflowCatalog, default_workflow_directory, load_workflow_catalog
+from fluke_app.workflow_catalog import (
+    WorkflowCatalog,
+    default_workflow_directory,
+    load_workflow_catalog,
+    save_workflow_definition,
+    user_workflow_directory,
+    workflow_definition_payload,
+)
 from fluke_app.workflow_runner import WorkflowRunner
 
 if TYPE_CHECKING:
@@ -85,6 +92,9 @@ __all__ = [
     "default_workflow_directory",
     "load_workflow_catalog",
     "new_session",
+    "save_workflow_definition",
+    "user_workflow_directory",
+    "workflow_definition_payload",
 ]
 
 

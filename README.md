@@ -62,6 +62,7 @@ What exists now:
   - desktop session exports include raw CSV/JSON plus analysis CSV and segment-summary JSON
   - workflow steps support manual, stable-capture, countdown, and observe-and-confirm interaction modes
   - workflow capture steps support pass/fail acceptance criteria (absolute min/max plus relative percent-within, percent-drop, and phase-unbalance checks) with per-step and overall run verdicts
+  - acceptance limits are user-customizable: copies placed in the per-user workflow directory (desktop `Customize Limits` button or `fluke workflow customize`) override built-in packs without touching the install directory
   - workflow run history can be reviewed and exported as Markdown or professional PDF job reports from the desktop UI and CLI
   - optional asset tracking: attach sessions to equipment and trend a piece of gear's min/max/avg/median readings over time, with trend chart and CSV export
 - shared alerting (`AlertEvaluator`) with high/low thresholds, out-of-band duration debounce, and reading-status / connection alerts, surfaced in both the CLI and desktop app (banner, beep, OS notification, and session markers)

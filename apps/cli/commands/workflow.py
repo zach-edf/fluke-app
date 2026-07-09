@@ -52,6 +52,16 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     report_parser.add_argument("--report-notes", default=None, help="Free-form notes for the report")
     report_parser.set_defaults(func=handle_report)
 
+    customize_parser = workflow_subparsers.add_parser(
+        "customize",
+        help="Copy a workflow into your user folder so its steps and pass/fail limits can be edited",
+    )
+    customize_parser.add_argument("--workflow", required=True, help="Workflow id to copy")
+    customize_parser.add_argument(
+        "--force", action="store_true", help="Overwrite an existing customized copy"
+    )
+    customize_parser.set_defaults(func=handle_customize)
+
 
 async def handle_list(args: argparse.Namespace) -> int:
     catalog = build_workflows()
@@ -85,6 +95,29 @@ async def handle_list(args: argparse.Namespace) -> int:
             print(f"  category={wf.category} | steps={len(wf.steps)}{duration}")
             if wf.description:
                 print(f"  {wf.description}")
+    return 0
+
+
+async def handle_customize(args: argparse.Namespace) -> int:
+    from fluke_app import save_workflow_definition, user_workflow_directory
+
+    catalog = build_workflows()
+    definition = catalog.get(args.workflow)
+    if definition is None:
+        print(f"Unknown workflow {args.workflow!r}. Use `fluke workflow list` to see ids.", file=sys.stderr)
+        return 1
+    try:
+        path = save_workflow_definition(definition, overwrite=args.force)
+    except FileExistsError as exc:
+        print(f"Customized copy already exists: {exc}", file=sys.stderr)
+        print("Edit that file directly, or pass --force to overwrite it with the built-in defaults.", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"workflow_id": definition.workflow_id, "path": str(path)}, indent=2))
+    else:
+        print(f"Editable copy saved to: {path}")
+        print("Edit the per-step \"acceptance\" limits in the JSON; your copy overrides the built-in workflow.")
+        print(f"User workflow folder: {user_workflow_directory()}")
     return 0
 
 

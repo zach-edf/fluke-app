@@ -13,6 +13,7 @@ pure ``fluke_core`` layer.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -44,3 +45,24 @@ def bundled_data_dir(name: str) -> Path | None:
         return None
     candidate = root / name
     return candidate if candidate.exists() else None
+
+
+def user_data_dir(app_name: str = "fluke-community") -> Path:
+    """Return the platform user data directory for this app.
+
+    macOS:   ~/Library/Application Support/<app_name>
+    Windows: %LOCALAPPDATA%/<app_name>
+    Linux:   $XDG_DATA_HOME/<app_name> or ~/.local/share/<app_name>
+    Fallback: ./data
+
+    The directory is resolved lazily and never created here, so calling this
+    for display purposes has no filesystem side effects. Callers that write
+    must ``mkdir(parents=True, exist_ok=True)`` first.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / app_name
+    if sys.platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / app_name
+    if sys.platform.startswith("linux"):
+        return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / app_name
+    return Path("data")
