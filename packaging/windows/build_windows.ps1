@@ -22,15 +22,22 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $RepoRoot
 
+# Prefer the repo venv so the bundle is built from this checkout's editable
+# install; a global `python` may hold a stale fluke-community install pointing
+# at different (or deleted) sources.
+$Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $Python)) { $Python = "python" }
+Write-Host "==> Using interpreter: $Python" -ForegroundColor Cyan
+
 Write-Host "==> Building PyInstaller bundle" -ForegroundColor Cyan
-python -m PyInstaller packaging/fluke-desktop.spec --noconfirm --clean
+& $Python -m PyInstaller packaging/fluke-desktop.spec --noconfirm --clean
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed (exit $LASTEXITCODE)." }
 
 $ExePath = Join-Path $RepoRoot "dist\FlukeCommunity\FlukeCommunity.exe"
 if (-not (Test-Path $ExePath)) { throw "Expected executable not found: $ExePath" }
 
 Write-Host "==> Running smoke test" -ForegroundColor Cyan
-python packaging/smoke_test.py
+& $Python packaging/smoke_test.py
 if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit $LASTEXITCODE)." }
 
 if ($SkipInstaller) {
@@ -39,11 +46,14 @@ if ($SkipInstaller) {
 }
 
 $Iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-if (-not $Iscc) {
-    $DefaultIscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-    if (Test-Path $DefaultIscc) { $Iscc = $DefaultIscc } else { $Iscc = $null }
-} else {
+if ($Iscc) {
     $Iscc = $Iscc.Source
+} else {
+    $IsccCandidates = @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    )
+    $Iscc = $IsccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 
 if (-not $Iscc) {

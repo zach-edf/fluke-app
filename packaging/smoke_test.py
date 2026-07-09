@@ -83,8 +83,42 @@ def main(argv: list[str]) -> int:
         print(f"smoke_test: FAILED - exit code {result.returncode}.", file=sys.stderr)
         return result.returncode
 
+    workflow_check = _check_bundled_workflows(binary, repo_root)
+    if workflow_check is not None:
+        print(f"smoke_test: FAILED - {workflow_check}", file=sys.stderr)
+        return 4
+
     print("smoke_test: PASSED")
     return 0
+
+
+def _check_bundled_workflows(binary: Path, repo_root: Path) -> str | None:
+    """Verify the bundle ships every built-in workflow pack from this checkout.
+
+    Guards against building from a stale interpreter whose fluke-community
+    install points at different sources than this repo.
+    """
+    expected = {path.name for path in (repo_root / "workflows").glob("*.json")}
+    if not expected:
+        return None
+    bundle_dirs = [
+        binary.parent / "_internal" / "fluke_app" / "workflows",
+        binary.parent / "_internal" / "workflows",
+        # macOS .app layout
+        binary.parent.parent / "Resources" / "fluke_app" / "workflows",
+    ]
+    for bundle_dir in bundle_dirs:
+        if bundle_dir.exists():
+            bundled = {path.name for path in bundle_dir.glob("*.json")}
+            missing = expected - bundled
+            if missing:
+                return (
+                    f"bundle at {bundle_dir} is missing workflow pack(s): "
+                    f"{', '.join(sorted(missing))} - was the build run from this "
+                    "repo's environment?"
+                )
+            return None
+    return None  # layout unknown; do not fail the smoke test on it
 
 
 if __name__ == "__main__":
